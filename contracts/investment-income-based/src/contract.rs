@@ -5,7 +5,8 @@ use stellar_contract_utils::pausable::{self as pausable, Pausable};
 use stellar_macros::{only_owner, when_not_paused};
 use stellar_tokens::non_fungible::{Base, NonFungibleToken};
 
-use crate::balance::{Amount, CalculateAmounts, ContractBalance};
+use crate::amounts::{Amount};
+use crate::balance::ContractBalance;
 use crate::claim::{calculate_claimable_payments, Claim};
 use crate::data::{ContractData, FromNumber, InvestmentContractParams, State};
 use crate::investment::{Investment, InvestmentReturnType};
@@ -165,13 +166,7 @@ impl InvestmentContract {
         let tk = get_token(&env, &contract_data);
 
         validation::validate_investment(amount, &contract_data, tk.balance(&addr))?;
-
-        let token_decimals: u8 = tk
-            .decimals()
-            .try_into()
-            .expect("Token decimals must fit in u8")
-        ;
-        let amounts: Amount = Amount::from_investment(&env, &amount, &contract_data.interest_rate, token_decimals);
+        let amounts: Amount = Amount::from_investment(&env, &amount, &contract_data.interest_rate, tk.decimals());
 
         // Validate goal before transfer
         let mut contract_balance = Storage::get_balances_or_new(&env);
@@ -189,7 +184,7 @@ impl InvestmentContract {
         Storage::update_contract_balances(&env, &contract_balance);
 
         let token_id = Base::sequential_mint(&env, &addr);
-        let addr_investment =Investment::new(&env, &contract_data, &amount, token_decimals, token_id);
+        let addr_investment = Investment::new(&env, &contract_data, &amounts, token_id);
         Storage::update_investment_with_claim(&env, token_id, &addr_investment);
 
         if contract_balance.received_so_far >= contract_data.goal {

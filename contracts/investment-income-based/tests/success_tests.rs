@@ -1,7 +1,7 @@
 mod common;
 
 use common::{create_investment_contract, do_mint_and_invest, do_test_investment};
-use investment_income_based::balance::{calculate_rate_denominator, ContractBalance};
+use investment_income_based::{amounts::calculate_rate_denominator, balance::ContractBalance};
 use investment_income_based::investment::Investment;
 use soroban_sdk::{testutils::Ledger, Env};
 

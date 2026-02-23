@@ -1,5 +1,5 @@
 use crate::{
-    balance::{Amount, CalculateAmounts},
+    amounts::{Amount},
     constants::SECONDS_IN_DAY,
     data::{ContractData, FromNumber},
 };
@@ -22,8 +22,7 @@ pub struct Investment {
 }
 
 impl Investment {
-    pub fn new(env: &Env, cd: &ContractData, amount: &i128, decimals: u8, token_id: u32) -> Self {
-        let amounts: Amount = Amount::from_investment(env, amount, &cd.interest_rate, decimals);
+    pub fn new(env: &Env, cd: &ContractData, amounts: &Amount, token_id: u32) -> Self {
         let real_amount = amounts.amount_to_invest + amounts.amount_to_reserve_fund;
         let current_interest = (real_amount * cd.interest_rate as i128) / 100 / 100;
         let total_gains = real_amount + current_interest;
