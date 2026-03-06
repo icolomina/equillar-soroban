@@ -27,6 +27,8 @@ pub enum Error {
     WouldExceedGoal = 30,
     GoalAlreadyReached = 31,
     AmountToInvestMustBeGreaterThanZero = 32,
+    CollateralLevelTooLow = 33,
+    OnlyOneCollateralTokenAllowed = 34,
 }
 
 /// Macro for validation checks with early return on error

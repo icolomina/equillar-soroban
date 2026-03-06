@@ -9,3 +9,4 @@ pub mod data;
 pub mod investment;
 mod storage;
 mod validation;
+pub mod collateral;

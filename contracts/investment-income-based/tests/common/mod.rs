@@ -13,6 +13,28 @@ use soroban_sdk::{
 use token::Client as TokenClient;
 use token::StellarAssetClient as TokenAdminClient;
 
+pub mod reflector {
+    use investment_income_based::collateral::{Asset, PriceData, ReflectorOracle};
+    use soroban_sdk::{contract, contractimpl};
+
+    use super::*;
+    #[contract]
+    pub struct ReflectorMock;
+    #[contractimpl]
+    impl ReflectorOracle for ReflectorMock {
+        fn x_last_price(_env: &Env, _base_asset: Asset, _quote_asset: Asset) -> Option<PriceData>{
+            Some(PriceData {
+                price: 936_i128,
+                timestamp: 65587445447_u64
+            })
+        }
+
+        fn decimals(_env: &Env) -> u32 {
+            3_u32
+        }
+    }
+}
+
 pub fn create_token_contract<'a>(
     e: &Env,
     admin: &Address,
@@ -49,6 +71,7 @@ pub fn create_investment_contract(
     let admin = Address::generate(&e);
     let user = Address::generate(&e);
     let project_address = Address::generate(&e);
+    let reflector_id = e.register(reflector::ReflectorMock, ());
     let (token, token_admin) = create_token_contract(&e, &admin);
     let uri = String::from_str(&e, "https://example.com");
     let name = String::from_str(&e, "Test Token");
@@ -71,6 +94,7 @@ pub fn create_investment_contract(
                 admin.clone(),
                 project_address.clone(),
                 token.address.clone(),
+                reflector_id,
                 uri,
                 name,
                 symbol,
@@ -110,6 +134,9 @@ pub fn do_test_investment(
 
     let mut contract_balances: ContractBalance = test_data.client.get_contract_balance();
     let mut last_contract_payments_balance: i128 = contract_balances.payments;
+    let mut last_payment_obligations = contract_balances.payment_obligations;
+
+    assert!(last_payment_obligations == investment_user.total);
 
     for multiplier in flows.iter() {
         last_transfer_ts = do_process_investor_payment_test(
@@ -123,14 +150,17 @@ pub fn do_test_investment(
 
         e.ledger().set_timestamp(last_transfer_ts + advance_secs);
         contract_balances = test_data.client.get_contract_balance();
+
         assert!(contract_balances.payments > last_contract_payments_balance);
+        assert!(contract_balances.payment_obligations < last_payment_obligations);
+
+        last_payment_obligations = contract_balances.payment_obligations;
         last_contract_payments_balance = contract_balances.payments;
     }
 
-    test_data
-        .token
-        .transfer(&test_data.project_address, &test_data.admin, &30000_i128);
+    test_data.token.transfer(&test_data.project_address, &test_data.admin, &30000_i128);
     test_data.client.add_company_transfer(&30000_i128);
+
     do_process_investor_payment_test(
         &test_data,
         &last_transfer_ts,
@@ -142,6 +172,7 @@ pub fn do_test_investment(
 
     contract_balances = test_data.client.get_contract_balance();
     assert!(contract_balances.payments > last_contract_payments_balance);
+    assert!(contract_balances.payment_obligations < last_payment_obligations);
 }
 
 pub fn do_process_investor_payment_test(

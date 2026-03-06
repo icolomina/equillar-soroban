@@ -1,6 +1,7 @@
 use crate::{
     balance::ContractBalance,
     claim::{calculate_next_claim, Claim},
+    collateral::Collateral,
     data::{ContractData, DataKey},
     investment::{Investment, InvestmentStatus},
 };
@@ -83,6 +84,17 @@ fn bump_persistent_ttl(e: &Env, key: &DataKey) {
     e.storage()
         .persistent()
         .extend_ttl(key, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+}
+
+pub fn update_collateral(e: &Env, collateral: &Collateral) {
+    e.storage()
+        .instance()
+        .set(&DataKey::Collateral, collateral);
+    bump_instance_ttl(e);
+}
+
+pub fn get_collateral(e: &Env) -> Option<Collateral> {
+    e.storage().instance().get(&DataKey::Collateral)
 }
 
 fn set_investment(e: &Env, token_id: u32, investment: &Investment) {

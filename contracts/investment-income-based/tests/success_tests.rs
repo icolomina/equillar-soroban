@@ -3,30 +3,16 @@ mod common;
 use common::{create_investment_contract, do_mint_and_invest, do_test_investment};
 use investment_income_based::{amounts::calculate_rate_denominator, balance::ContractBalance};
 use investment_income_based::investment::Investment;
-use soroban_sdk::{testutils::Ledger, Env};
+use soroban_sdk::{testutils::{Address as _, Ledger}, Env, Address, String};
+use crate::common::{create_token_contract, reflector};
 
 #[test]
 fn test_commision_calculator() {
-    assert_eq!(
-        calculate_rate_denominator(&(90_i128 * 10_000_000), 7),
-        10_u32
-    );
-    assert_eq!(
-        calculate_rate_denominator(&(120_i128 * 10_000_000), 7),
-        10_u32
-    );
-    assert_eq!(
-        calculate_rate_denominator(&(150_i128 * 10_000_000), 7),
-        10_u32
-    );
-    assert_eq!(
-        calculate_rate_denominator(&(500_i128 * 10_000_000), 7),
-        11_u32
-    );
-    assert_eq!(
-        calculate_rate_denominator(&(1900_i128 * 10_000_000), 7),
-        14_u32
-    );
+    assert_eq!(calculate_rate_denominator(&(90_i128 * 10_000_000), 7), 10_u32);
+    assert_eq!(calculate_rate_denominator(&(120_i128 * 10_000_000), 7), 10_u32);
+    assert_eq!(calculate_rate_denominator(&(150_i128 * 10_000_000), 7), 10_u32);
+    assert_eq!(calculate_rate_denominator(&(500_i128 * 10_000_000), 7),11_u32);
+    assert_eq!(calculate_rate_denominator(&(1900_i128 * 10_000_000), 7),14_u32);
 }
 
 #[test]
@@ -44,18 +30,11 @@ fn test_investment_reverse_loan() {
     );
 
     test_data.token_admin.mint(&test_data.user, &1000000);
-    test_data
-        .token_admin
-        .mint(&test_data.client.address, &300000);
-    test_data
-        .token_admin
-        .mint(&test_data.project_address, &300000);
+    test_data.token_admin.mint(&test_data.client.address, &300000);
+    test_data.token_admin.mint(&test_data.project_address, &300000);
     test_data.token_admin.mint(&test_data.admin, &300000);
 
     let investment_user: Investment = test_data.client.invest(&test_data.user, &100000);
-
-    // Verify token balance at contract address
-    assert!(test_data.token.balance(&test_data.client.address) > 0);
 
     // Verify token balance at contract address
     assert!(test_data.token.balance(&test_data.client.address) > 0);
@@ -83,12 +62,8 @@ fn test_investment_coupon() {
     );
 
     test_data.token_admin.mint(&test_data.user, &1000000);
-    test_data
-        .token_admin
-        .mint(&test_data.client.address, &300000);
-    test_data
-        .token_admin
-        .mint(&test_data.project_address, &300000);
+    test_data.token_admin.mint(&test_data.client.address, &300000);
+    test_data.token_admin.mint(&test_data.project_address, &300000);
     test_data.token_admin.mint(&test_data.admin, &300000);
 
     let investment_user: Investment = test_data.client.invest(&test_data.user, &100000);
@@ -97,7 +72,6 @@ fn test_investment_coupon() {
     e.ledger().set_timestamp(current_ts + 604888);
 
     test_data.client.add_company_transfer(&100000_i128);
-
     do_test_investment(&e, test_data, investment_user, 2);
 }
 
@@ -118,10 +92,7 @@ fn test_check_contract_balance() {
     do_mint_and_invest(&e, &test_data);
     let contract_balances: ContractBalance = test_data.client.get_contract_balance();
 
-    assert_eq!(
-        test_data.token.balance(&test_data.client.address),
-        150000_i128
-    );
+    assert_eq!(test_data.token.balance(&test_data.client.address), 150000_i128);
     assert!(contract_balances.comission > 0_i128);
     assert!(contract_balances.reserve > contract_balances.comission);
     assert!(contract_balances.project > contract_balances.reserve);
@@ -143,10 +114,7 @@ fn test_single_withdrawn() {
     do_mint_and_invest(&e, &test_data);
 
     test_data.client.single_withdrawn(&40000_i128);
-    assert_eq!(
-        test_data.token.balance(&test_data.project_address),
-        40000_i128
-    );
+    assert_eq!(test_data.token.balance(&test_data.project_address), 40000_i128);
 }
 
 #[test]
@@ -164,12 +132,8 @@ fn test_add_company_transfer() {
     );
     do_mint_and_invest(&e, &test_data);
 
-    test_data
-        .token_admin
-        .mint(&test_data.project_address, &1000000);
-    test_data
-        .token
-        .transfer(&test_data.project_address, &test_data.admin, &1000000);
+    test_data.token_admin.mint(&test_data.project_address, &1000000);
+    test_data.token.transfer(&test_data.project_address, &test_data.admin, &1000000);
     test_data.client.add_company_transfer(&1000000);
 
     let contract_balances: ContractBalance = test_data.client.get_contract_balance();
@@ -280,20 +244,14 @@ fn test_multiple_investments_same_user() {
     assert!(contract_balances.received_so_far >= deposited_1 + deposited_2);
 
     e.ledger().set_timestamp(claimable_ts_1);
-    test_data
-        .token_admin
-        .mint(&test_data.client.address, &500000);
+    test_data.token_admin.mint(&test_data.client.address, &500000);
     test_data.client.add_company_transfer(&500000);
 
-    let payment_1 = test_data
-        .client
-        .process_investor_payment(&investment_1.token_id);
+    let payment_1 = test_data.client.process_investor_payment(&investment_1.token_id);
     assert!(payment_1.paid > 0);
 
     e.ledger().set_timestamp(claimable_ts_2);
-    let payment_2 = test_data
-        .client
-        .process_investor_payment(&investment_2.token_id);
+    let payment_2 = test_data.client.process_investor_payment(&investment_2.token_id);
     assert!(payment_2.paid > 0);
 }
 
@@ -315,7 +273,6 @@ fn test_invest_at_goal_limit() {
     assert!(contract_balances.received_so_far > 0);
     assert!(contract_balances.received_so_far <= goal);
 
-    // Si ya alcanzamos el goal, verificar que no se puede invertir más
     if contract_balances.received_so_far >= goal {
         let result = test_data.client.try_invest(&test_data.user, &1000);
         assert!(
@@ -363,7 +320,6 @@ fn test_check_reserve_balance_no_investments() {
         true,
     );
 
-    // No investments, should need 0 additional funds
     let needed = test_data.client.check_reserve_balance();
     assert_eq!(needed, 0_i128);
 }
@@ -416,9 +372,8 @@ fn test_check_reserve_balance_claim_in_next_week_sufficient() {
 
     // next_transfer_ts = invest_timestamp + SECONDS_IN_MONTH (30 days)
     // Advance time to 29 days and 18 hours (within next week window from the payment date)
-    let seconds_in_month = 30 * 24 * 60 * 60_u64;
-    e.ledger()
-        .set_timestamp(invest_timestamp + seconds_in_month - (6 * 60 * 60));
+    let seconds_in_month: u64 = 30 * 24 * 60 * 60;
+    e.ledger().set_timestamp(invest_timestamp + seconds_in_month - (6 * 60 * 60));
 
     // Add sufficient funds to reserve
     test_data.client.add_company_transfer(&500000);
@@ -454,8 +409,7 @@ fn test_check_reserve_balance_claim_in_next_week_insufficient() {
     // next_transfer_ts = invest_timestamp + SECONDS_IN_MONTH (30 days)
     // Advance time to 27 days (3 days before next payment, within next week window)
     let seconds_in_month = 30 * 24 * 60 * 60_u64;
-    e.ledger()
-        .set_timestamp(invest_timestamp + seconds_in_month - (3 * 24 * 60 * 60));
+    e.ledger().set_timestamp(invest_timestamp + seconds_in_month - (3 * 24 * 60 * 60));
 
     // Don't add funds to reserve - it will be insufficient
     let balances: ContractBalance = test_data.client.get_contract_balance();
@@ -465,10 +419,7 @@ fn test_check_reserve_balance_claim_in_next_week_insufficient() {
     // Should need the difference between regular_payment and current reserve
     let needed = test_data.client.check_reserve_balance();
     let expected_diff = regular_payment - current_reserve;
-    assert_eq!(
-        needed, expected_diff,
-        "Should return exact difference needed"
-    );
+    assert_eq!(needed, expected_diff, "Should return exact difference needed");
     assert!(needed > 0, "Should need additional funds");
 }
 
@@ -504,8 +455,7 @@ fn test_check_reserve_balance_multiple_claims_in_next_week() {
     // Both next_transfer_ts will be invest_timestamp + SECONDS_IN_MONTH
     // Advance time to 28 days (2 days before next payment, within next week window)
     let seconds_in_month = 30 * 24 * 60 * 60_u64;
-    e.ledger()
-        .set_timestamp(invest_timestamp + seconds_in_month - (2 * 24 * 60 * 60));
+    e.ledger().set_timestamp(invest_timestamp + seconds_in_month - (2 * 24 * 60 * 60));
 
     // Get current reserve
     let balances: ContractBalance = test_data.client.get_contract_balance();
@@ -517,14 +467,48 @@ fn test_check_reserve_balance_multiple_claims_in_next_week() {
     let needed = test_data.client.check_reserve_balance();
     let expected_diff = total_needed - current_reserve;
 
-    assert_eq!(
-        needed, expected_diff,
-        "Should sum both claims and subtract reserve"
+    assert_eq!(needed, expected_diff, "Should sum both claims and subtract reserve");
+    assert!(needed > 0, "Should need additional funds for multiple claims");
+}
+
+#[test]
+fn test_add_collateral() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e,
+        500_u32,
+        7_u64,
+        1000000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true
     );
-    assert!(
-        needed > 0,
-        "Should need additional funds for multiple claims"
+
+    let collateral_addr = Address::generate(&e);
+    let reflector_id = e.register(reflector::ReflectorMock, ());
+    let (token_collateral, token_collateral_admin)  = create_token_contract(&e, &test_data.admin);
+    token_collateral_admin.mint(&collateral_addr, &200_i128);
+    test_data.token_admin.mint(&test_data.user, &150_i128);
+    test_data.client.invest(&test_data.user, &150_i128);
+    let collateral = test_data.client.add_collateral(
+        &token_collateral.address, 
+        &100_i128, 
+        &String::from_str(&e,"TEST"), 
+        &collateral_addr
     );
+
+    assert_eq!(collateral.collateral_level, 6000_u32);
+
+    let collateral = test_data.client.add_collateral(
+        &token_collateral.address, 
+        &100_i128, 
+        &String::from_str(&e,"TEST"), 
+        &collateral_addr
+    );
+
+    assert!(collateral.collateral_level > 6000_u32);
+
 }
 
 #[test]
@@ -549,18 +533,12 @@ fn test_owner_authorization_verification() {
     assert_eq!(auths.len(), 1, "Should request exactly one authorization");
 
     // Verify it was from the owner (admin)
-    assert_eq!(
-        auths[0].0, test_data.admin,
-        "Authorization should be from admin/owner"
-    );
+    assert_eq!(auths[0].0, test_data.admin, "Authorization should be from admin/owner");
 
     // Test another protected function
     test_data.client.unpause(&test_data.admin);
 
     let auths = e.auths();
     assert_eq!(auths.len(), 1, "Should request exactly one authorization");
-    assert_eq!(
-        auths[0].0, test_data.admin,
-        "Authorization should be from admin/owner"
-    );
+    assert_eq!(auths[0].0, test_data.admin, "Authorization should be from admin/owner");
 }

@@ -1,7 +1,9 @@
 mod common;
 
 use common::{create_investment_contract, do_mint_and_invest};
-use soroban_sdk::Env;
+use soroban_sdk::{testutils::{Address as _}, Env, Address, String};
+
+use crate::common::{create_token_contract, reflector};
 
 // ==================== Constructor Error Tests ====================
 
@@ -355,6 +357,73 @@ fn test_process_payment_insufficient_reserve() {
     test_data
         .client
         .process_investor_payment(&investment.token_id);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #1)")]
+fn test_add_collateral_insufficient_balance() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e,
+        500_u32,
+        7_u64,
+        1000000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+    );
+
+    let collateral_addr = Address::generate(&e);
+    let (token_collateral, _token_collateral_admin)  = create_token_contract(&e, &test_data.admin);
+    // Do not mint tokens to the collateral address, so balance is insufficient
+
+    test_data.client.add_collateral(
+        &token_collateral.address, 
+        &100_i128, 
+        &String::from_str(&e,"TEST"), 
+        &collateral_addr
+        
+    );
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #34)")]
+fn test_add_collateral_only_one_collateral_token_allowed() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e,
+        500_u32,
+        7_u64,
+        1000000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true
+    );
+
+    let collateral_addr = Address::generate(&e);
+    let (token_collateral, token_collateral_admin)  = create_token_contract(&e, &test_data.admin);
+    let (token_collateral_2, token_collateral_admin_2)  = create_token_contract(&e, &test_data.admin);
+    token_collateral_admin.mint(&collateral_addr, &200_i128);
+    token_collateral_admin_2.mint(&collateral_addr, &200_i128);
+    test_data.token_admin.mint(&test_data.user, &150_i128);
+    test_data.client.invest(&test_data.user, &150_i128);
+    test_data.client.add_collateral(
+        &token_collateral.address, 
+        &100_i128, 
+        &String::from_str(&e,"TEST"), 
+        &collateral_addr
+    );
+
+    test_data.client.add_collateral(
+        &token_collateral_2.address, 
+        &100_i128, 
+        &String::from_str(&e,"TEST2"), 
+        &collateral_addr
+    );
+
+
 }
 
 // ==================== Lifecycle Error Tests ====================

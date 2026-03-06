@@ -1,6 +1,6 @@
 use soroban_sdk::{contractevent, contracttype, Env};
 
-use crate::amounts::Amount;
+use crate::{amounts::Amount, investment::Investment};
 
 
 #[contracttype]
@@ -13,6 +13,9 @@ pub struct ContractBalance {
     pub reserve_contributions: i128,
     pub project_withdrawals: i128,
     pub moved_from_project_to_reserve: i128,
+    pub payment_obligations: i128,
+    pub collateral_received: i128,
+    pub collateral_liquidated: i128
 }
 
 #[contractevent(topics = ["CBUPDATED"])]
@@ -25,6 +28,9 @@ pub struct ContractBalanceUpdated {
     pub reserve_contributions: i128,
     pub project_withdrawals: i128,
     pub moved_from_project_to_reserve: i128,
+    pub payment_obligations: i128,
+    pub collateral_received: i128,
+    pub collateral_liquidated: i128
 }
 
 impl Default for ContractBalance {
@@ -44,6 +50,9 @@ impl ContractBalance {
             reserve_contributions: 0_i128,
             project_withdrawals: 0_i128,
             moved_from_project_to_reserve: 0_i128,
+            payment_obligations: 0_i128,
+            collateral_received: 0_i128,
+            collateral_liquidated: 0_i128
         }
     }
 
@@ -51,11 +60,12 @@ impl ContractBalance {
         self.comission + self.project + self.reserve
     }
 
-    pub fn recalculate_from_investment(&mut self, amounts: &Amount) {
+    pub fn recalculate_from_investment(&mut self, amounts: &Amount, investment: &Investment) {
         self.comission += amounts.amount_to_commission;
         self.reserve += amounts.amount_to_reserve_fund;
         self.project += amounts.amount_to_invest;
         self.received_so_far += amounts.amount_to_reserve_fund + amounts.amount_to_invest;
+        self.payment_obligations += investment.total
     }
 
     pub fn recalculate_from_company_contribution(&mut self, amount: &i128) {
@@ -71,12 +81,22 @@ impl ContractBalance {
     pub fn recalculate_from_payment_to_investor(&mut self, amount: &i128) {
         self.reserve -= amount;
         self.payments += amount;
+        self.payment_obligations -= amount;
     }
 
     pub fn recalculate_from_project_to_reserver_movement(&mut self, amount: &i128) {
         self.project -= amount;
         self.reserve += amount;
         self.moved_from_project_to_reserve += amount;
+    }
+
+    pub fn recalculate_from_collateral_received(&mut self, amount: &i128) {
+        self.collateral_received += amount;
+    }
+
+    pub fn recalculate_from_collateral_liquidated(&mut self, amount: &i128) {
+        self.collateral_liquidated += amount;
+        self.collateral_received -= amount;
     }
 
     /// Emits a ContractBalancesUpdated event
@@ -90,6 +110,9 @@ impl ContractBalance {
             reserve_contributions: self.reserve_contributions,
             project_withdrawals: self.project_withdrawals,
             moved_from_project_to_reserve: self.moved_from_project_to_reserve,
+            payment_obligations: self.payment_obligations,
+            collateral_received: self.collateral_received,
+            collateral_liquidated: self.collateral_liquidated
         }
         .publish(env);
     }

@@ -8,6 +8,7 @@ use stellar_tokens::non_fungible::{Base, NonFungibleToken};
 use crate::amounts::{Amount};
 use crate::balance::ContractBalance;
 use crate::claim::{calculate_claimable_payments, Claim};
+use crate::collateral::{calculate_collateral_level, Collateral};
 use crate::data::{ContractData, FromNumber, InvestmentContractParams, State};
 use crate::investment::{Investment, InvestmentReturnType};
 use crate::validation::{self, Error};
@@ -16,6 +17,10 @@ use crate::{require, storage as Storage};
 
 fn get_token<'a>(env: &'a Env, contract_data: &ContractData) -> TokenClient<'a> {
     token::Client::new(env, &contract_data.token)
+}
+
+fn get_collateral_token<'a>(env: &'a Env, collateral_token: &Address) -> TokenClient<'a> {
+    token::Client::new(env, collateral_token)
 }
 
 #[contract]
@@ -53,6 +58,7 @@ impl InvestmentContract {
         owner_addr: Address,
         project_address: Address,
         token_addr: Address,
+        price_oracle: Address,
         uri: String,
         name: String,
         symbol: String,
@@ -73,6 +79,7 @@ impl InvestmentContract {
             &investment_params,
             token_addr,
             project_address,
+            price_oracle,
         );
 
         Base::set_metadata(&env, uri, name, symbol);
@@ -180,11 +187,12 @@ impl InvestmentContract {
             .map_err(|_| Error::RecipientCannotReceivePayment)?
             .map_err(|_| Error::InvalidPaymentData)?;
 
-        contract_balance.recalculate_from_investment(&amounts);
-        Storage::update_contract_balances(&env, &contract_balance);
-
         let token_id = Base::sequential_mint(&env, &addr);
         let addr_investment = Investment::new(&env, &contract_data, &amounts, token_id);
+
+        contract_balance.recalculate_from_investment(&amounts, &addr_investment);
+        Storage::update_contract_balances(&env, &contract_balance);
+
         Storage::update_investment_with_claim(&env, token_id, &addr_investment);
 
         if contract_balance.received_so_far >= contract_data.goal {
@@ -418,6 +426,65 @@ impl InvestmentContract {
 
         contract_balances.emit_event(&env);
         Ok(investment)
+    }
+
+    pub fn add_collateral(
+        env: Env,
+        collateral_token_addr: Address,
+        collateral_token_amount: i128,
+        collateral_token_symbol: String,
+        collateral_addr: Address,
+    ) -> Result<Collateral, Error> {
+        collateral_addr.require_auth();
+
+        if let Some(coll) = Storage::get_collateral(&env) {
+            if coll.token_collateral_address != collateral_token_addr {
+                return Err(Error::OnlyOneCollateralTokenAllowed);
+            }
+        }
+
+        let collateral_token_client = get_collateral_token(&env, &collateral_token_addr);
+
+        if collateral_token_client.balance(&collateral_addr) < collateral_token_amount {
+            return Err(Error::AddressInsufficientBalance);
+        }
+
+        let current_collateral_token_amount = collateral_token_client.balance(&env.current_contract_address());
+
+        collateral_token_client
+            .try_transfer(&collateral_addr, &env.current_contract_address(), &collateral_token_amount)
+            .map_err(|_| Error::RecipientCannotReceivePayment)?
+            .map_err(|_| Error::InvalidPaymentData)?;
+
+        let mut contract_balances = Storage::get_balances_or_new(&env);
+        contract_balances.recalculate_from_collateral_received(&collateral_token_amount);
+        Storage::update_contract_balances(&env, &contract_balances);
+
+        let contract_data = Storage::get_contract_data(&env);
+        let contract_token_client = get_token(&env, &contract_data);
+
+        if let Some(level) = calculate_collateral_level(
+            &env,
+            &contract_data.price_oracle,
+            &collateral_token_addr,
+            collateral_token_amount + current_collateral_token_amount,
+            collateral_token_client.decimals(),
+            &contract_data.token,
+            contract_token_client.decimals(),
+            contract_balances.payment_obligations,
+        ) {
+            let collateral = Collateral {
+                token_collateral_address: collateral_token_addr,
+                token_collateral_symbol: collateral_token_symbol,
+                address_collateral_token: collateral_addr,
+                collateral_amount: collateral_token_amount,
+                collateral_level: level
+            };
+            Storage::update_collateral(&env, &collateral);
+            Ok(collateral)
+        } else {
+            return Err(Error::CollateralLevelTooLow);
+        }
     }
 }
 

@@ -45,6 +45,7 @@ pub struct ContractData {
     pub claim_block_days: u64,
     pub token: Address,
     pub project_address: Address,
+    pub price_oracle: Address,
     pub state: State,
     pub return_type: InvestmentReturnType,
     pub return_months: u32,
@@ -57,12 +58,14 @@ impl ContractData {
         params: &InvestmentContractParams,
         token: Address,
         project_address: Address,
+        price_oracle: Address,
     ) -> Self {
         ContractData {
             interest_rate: params.i_rate,
             claim_block_days: params.claim_block_days,
             token,
             project_address,
+            price_oracle,
             state: State::Active,
             return_type: InvestmentReturnType::from_number(params.return_type).unwrap(),
             return_months: params.return_months,
@@ -80,4 +83,5 @@ pub enum DataKey {
     ClaimsMap,
     MultisigRequest,
     ContractBalances,
+    Collateral,
 }
