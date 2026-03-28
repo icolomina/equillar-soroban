@@ -1,10 +1,9 @@
 #![allow(dead_code)]
 
 pub use investment_income_based::{
-    balance::ContractBalance,
     contract::{InvestmentContract, InvestmentContractClient},
     data::InvestmentContractParams,
-    investment::{Investment, InvestmentStatus},
+    investment::Investment,
 };
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
@@ -59,6 +58,7 @@ pub fn create_investment_contract(
     e: &Env,
     i_rate: u32,
     claim_block_days: u64,
+    fundraising_days: u64,
     goal: i128,
     return_type: u32,
     return_months: u32,
@@ -80,6 +80,7 @@ pub fn create_investment_contract(
     let investment_params: InvestmentContractParams = InvestmentContractParams {
         i_rate,
         claim_block_days,
+        fundraising_days,
         goal,
         return_type,
         return_months,
@@ -113,91 +114,41 @@ pub fn create_investment_contract(
     }
 }
 
-pub fn do_mint_and_invest(e: &Env, test_data: &TestData) {
-    let another_user: Address = Address::generate(e);
-    test_data.token_admin.mint(&test_data.user, &1000000);
-    test_data.token_admin.mint(&another_user, &1000000);
-
-    test_data.client.invest(&test_data.user, &100000);
-    test_data.client.invest(&another_user, &50000);
-}
-
-pub fn do_test_investment(
-    e: &Env,
-    test_data: TestData,
-    investment_user: Investment,
-    return_type: u32,
-) {
-    let mut last_transfer_ts: u64 = 0;
-    let flows = [1_i128, 2_i128, 3_i128];
-    let advance_secs = 30 * 24 * 60 * 61;
-
-    let mut contract_balances: ContractBalance = test_data.client.get_contract_balance();
-    let mut last_contract_payments_balance: i128 = contract_balances.payments;
-    let mut last_payment_obligations = contract_balances.payment_obligations;
-
-    assert!(last_payment_obligations == investment_user.total);
-
-    for multiplier in flows.iter() {
-        last_transfer_ts = do_process_investor_payment_test(
-            &test_data,
-            &last_transfer_ts,
-            *multiplier,
-            InvestmentStatus::CashFlowing,
-            return_type,
-            investment_user.token_id,
-        );
-
-        e.ledger().set_timestamp(last_transfer_ts + advance_secs);
-        contract_balances = test_data.client.get_contract_balance();
-
-        assert!(contract_balances.payments > last_contract_payments_balance);
-        assert!(contract_balances.payment_obligations < last_payment_obligations);
-
-        last_payment_obligations = contract_balances.payment_obligations;
-        last_contract_payments_balance = contract_balances.payments;
-    }
-
-    test_data.token.transfer(&test_data.project_address, &test_data.admin, &30000_i128);
-    test_data.client.add_company_transfer(&30000_i128);
-
-    do_process_investor_payment_test(
-        &test_data,
-        &last_transfer_ts,
-        4_i128,
-        InvestmentStatus::Finished,
-        return_type,
-        investment_user.token_id,
-    );
-
-    contract_balances = test_data.client.get_contract_balance();
-    assert!(contract_balances.payments > last_contract_payments_balance);
-    assert!(contract_balances.payment_obligations < last_payment_obligations);
-}
-
-pub fn do_process_investor_payment_test(
+pub fn assert_contract_balance(
     test_data: &TestData,
-    last_transfer_ts: &u64,
-    multiplier: i128,
-    status: InvestmentStatus,
-    return_type: u32,
-    token_id: u32,
-) -> u64 {
-    let investment_user_1: Investment = test_data.client.process_investor_payment(&token_id);
-    assert_eq!(investment_user_1.status, status);
-    assert!(investment_user_1.last_transfer_ts > *last_transfer_ts);
-
-    if return_type == 2 && status == InvestmentStatus::Finished {
-        assert_eq!(
-            investment_user_1.paid,
-            ((investment_user_1.regular_payment * multiplier) + investment_user_1.deposited)
-        );
-    } else {
-        assert_eq!(
-            investment_user_1.paid,
-            (investment_user_1.regular_payment * multiplier)
-        );
-    }
-
-    investment_user_1.last_transfer_ts
+    project: i128,
+    reserve: i128,
+    comission: i128,
+    payments: i128,
+    received_so_far: i128,
+    reserve_contributions: i128,
+) {
+    let b = test_data.client.get_contract_balance();
+    assert_eq!(b.project, project);
+    assert_eq!(b.reserve, reserve);
+    assert_eq!(b.comission, comission);
+    assert_eq!(b.payments, payments);
+    assert_eq!(b.received_so_far, received_so_far);
+    assert_eq!(b.reserve_contributions, reserve_contributions);
 }
+
+pub fn do_payment_round(
+    e: &Env,
+    test_data: &TestData,
+    token_id: u32,
+    transfer_amount: i128,
+    expected_paid: i128,
+    expected_transfers: u32,
+    expected_completed: bool,
+) -> Investment {
+    e.ledger().set_timestamp(e.ledger().timestamp() + (30 * 86401));
+    test_data.client.add_company_transfer(&transfer_amount);
+    let inv = test_data.client.process_investor_payment(&token_id);
+    assert_eq!(inv.paid, expected_paid);
+    assert_eq!(inv.payments_transferred, expected_transfers);
+    assert_eq!(inv.completed, expected_completed);
+    
+    inv
+}
+
+

@@ -1,5 +1,7 @@
-use soroban_sdk::{contractclient, contracttype, Address, Env, String, Symbol, log};
+use soroban_sdk::{Address, Env, String, Symbol, contractclient, contracttype};
 use stellar_contract_utils::math::wad::Wad;
+
+use crate::{balance::ContractBalance, investment::Investment};
 
 #[contracttype]
 #[derive(Clone)]
@@ -53,7 +55,7 @@ pub fn calculate_collateral_level(
     payment_obligations: i128,
 ) -> Option<u32> {
     if payment_obligations == 0 {
-        return None;
+        return Some(100_000_u32);
     }
 
     let oracle = ReflectorClient::new(env, oracle_addr);
@@ -72,4 +74,23 @@ pub fn calculate_collateral_level(
     let level = collateral_value * 10_000_i128 / payment_obligations;
 
     Some(level as u32)
+}
+
+pub fn get_collateral_for_investment(
+    env : &Env, 
+    investment: &Investment, 
+    contract_balance: &ContractBalance, 
+    collateral_amount: i128,
+    collateral_token_decimals: u32
+) -> i128{
+
+    let amount_to_paid_pending = investment.total - investment.paid;
+
+    let investment_collateral_corresponding_ratio = Wad::from_ratio(env, amount_to_paid_pending, contract_balance.payment_obligations);
+    let amount_collateral_wad = Wad::from_token_amount(env, collateral_amount, collateral_token_decimals as u8);
+
+    let investment_corresponding_collateral_amount_wad = investment_collateral_corresponding_ratio * amount_collateral_wad;
+    let investment_corresponding_collateral_amount = investment_corresponding_collateral_amount_wad.to_token_amount(env, collateral_token_decimals as u8);
+
+    investment_corresponding_collateral_amount
 }

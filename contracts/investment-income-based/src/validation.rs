@@ -1,7 +1,6 @@
 use crate::balance::ContractBalance;
-use crate::constants::SECONDS_IN_MONTH;
-use crate::data::{ContractData, State};
-use crate::investment::{Investment, InvestmentStatus};
+use crate::data::ContractData;
+use crate::investment::Investment;
 use soroban_sdk::token::TokenClient;
 use soroban_sdk::{contracterror, Address, Env};
 
@@ -9,26 +8,41 @@ use soroban_sdk::{contracterror, Address, Env};
 #[repr(u32)]
 #[contracterror]
 pub enum Error {
-    AddressInsufficientBalance = 1,
-    ContractInsufficientBalance = 2,
-    AmountLessThanMinimum = 5,
+    // -- Constructor --
     InterestRateMustBeGreaterThanZero = 6,
     GoalMustBeGreaterThanZero = 7,
     UnsupportedReturnType = 8,
     ReturnMonthsMustBeGreaterThanZero = 9,
     MinPerInvestmentMustBeGreaterThanZero = 10,
+
+    // -- Investment --
+    AddressInsufficientBalance = 1,
+    AmountLessThanMinimum = 5,
+    GoalReached = 30,
+    FundrasingTimeExceeded = 40,
+
+    // -- Payment processing --
     AddressHasNotInvested = 14,
-    AddressInvestmentIsNotClaimableYet = 15,
-    AddressInvestmentIsFinished = 16,
-    AddressInvestmentNextTransferNotClaimableYet = 17,
-    ProjectBalanceInsufficientAmount = 24,
+    InvestmentCompleted = 38,
+    PaymentAlreadyProcessedForThisPeriod = 42,
+    ContractReserveInsufficientBalance = 2,
+
+    // -- Withdrawal --
+    FundrasingTimeOngoingYet = 39,
+    ContractInsufficientBalance = 3,
+
+    // -- Company transfer --
+    NextPaymentCannotBeScheduledYet = 43,
+
+    // -- Token transfer execution --
     RecipientCannotReceivePayment = 28,
     InvalidPaymentData = 29,
-    WouldExceedGoal = 30,
-    GoalAlreadyReached = 31,
-    AmountToInvestMustBeGreaterThanZero = 32,
+
+    // -- Collateral --
     CollateralLevelTooLow = 33,
     OnlyOneCollateralTokenAllowed = 34,
+    CollateralNotConfigured = 36,
+    CollateralBalanceIsEmpty = 37,
 }
 
 /// Macro for validation checks with early return on error
@@ -64,24 +78,16 @@ pub fn validate_constructor_params(
     Ok(())
 }
 
-/// Validates that an investment is ready for payment processing
-pub fn validate_investment_payment(env: &Env, investment: &Investment) -> Result<(), Error> {
-    require!(
-        env.ledger().timestamp() >= investment.claimable_ts, Error::AddressInvestmentIsNotClaimableYet,
-        investment.status != InvestmentStatus::Finished, Error::AddressInvestmentIsFinished,
-        investment.last_transfer_ts == 0 || (env.ledger().timestamp() - investment.last_transfer_ts) >= SECONDS_IN_MONTH, Error::AddressInvestmentNextTransferNotClaimableYet
-    );
-    Ok(())
-}
-
 /// Validates that there is sufficient reserve balance for payment
 pub fn validate_reserve_balance(
     amount_to_transfer: i128,
+    investment: &Investment,
     contract_balances: &ContractBalance,
+    next_payment_round: u32
 ) -> Result<(), Error> {
     require!(
-        amount_to_transfer <= contract_balances.reserve,
-        Error::ContractInsufficientBalance
+        investment.payments_transferred == next_payment_round, Error::PaymentAlreadyProcessedForThisPeriod,
+        amount_to_transfer <= contract_balances.reserve, Error::ContractReserveInsufficientBalance
     );
     Ok(())
 }
@@ -91,65 +97,58 @@ pub fn validate_investment(
     amount: i128,
     contract_data: &ContractData,
     investor_balance: i128,
+    current_ts: u64,
+    contract_balance: &ContractBalance
 ) -> Result<(), Error> {
     require!(
+        contract_balance.received_so_far < contract_data.goal, Error::GoalReached,
         amount >= contract_data.min_per_investment, Error::AmountLessThanMinimum,
-        contract_data.state != State::FundsReached, Error::GoalAlreadyReached,
         investor_balance >= amount, Error::AddressInsufficientBalance,
-        amount > 0, Error::AmountToInvestMustBeGreaterThanZero
-    );
-    Ok(())
-}
-
-/// Validates that investment won't exceed funding goal
-pub fn validate_investment_goal(
-    received_so_far: i128,
-    amount_to_invest: i128,
-    goal: i128,
-) -> Result<(), Error> {
-    require!(
-        received_so_far + amount_to_invest <= goal,
-        Error::WouldExceedGoal
+        current_ts < contract_data.ts_fundraising_ends, Error::FundrasingTimeExceeded
     );
     Ok(())
 }
 
 /// Validates sufficient project balance for withdrawal
-pub fn validate_withdrawal(amount: i128, project_balance: i128) -> Result<(), Error> {
+pub fn validate_withdrawal(amount: i128, project_balance: i128, current_ts: u64, contract_data: &ContractData) -> Result<(), Error> {
     require!(
-        project_balance >= amount,
-        Error::ContractInsufficientBalance
+        current_ts > contract_data.ts_fundraising_ends, Error::FundrasingTimeOngoingYet,
+        project_balance >= amount, Error::ContractInsufficientBalance
     );
     Ok(())
 }
 
-/// Validates sufficient balance for company transfer
+/// Validates sufficient balance for company transfer.
+///
+/// For any round except the last, verifies the transfer covers the monthly interest shortfall.
+/// For the last round, verifies the reserve after the transfer covers all remaining
+/// `payment_obligations` — this is critical for Coupon investments where the final payment
+/// also returns the full deposited principal.
 pub fn validate_company_transfer(
+    e: &Env,
     token: &TokenClient,
     owner: &Address,
+    contract_data: &ContractData,
+    contract_balance: &ContractBalance,
     amount: i128,
+    next_payment_round: u32,
 ) -> Result<(), Error> {
-    require!(
-        token.balance(owner) >= amount,
-        Error::AddressInsufficientBalance
-    );
-    Ok(())
-}
+    let current_ts = e.ledger().timestamp();
+    require!(current_ts >= contract_data.ts_payments_start, Error::NextPaymentCannotBeScheduledYet);
 
-/// Validates sufficient project balance for moving funds to reserve
-pub fn validate_move_to_reserve(amount: i128, project_balance: i128) -> Result<(), Error> {
-    require!(
-        project_balance > amount,
-        Error::ProjectBalanceInsufficientAmount
-    );
-    Ok(())
-}
+    let is_last_round = next_payment_round == contract_data.return_months - 1;
+    if is_last_round {
+        require!(
+            contract_balance.reserve + amount >= contract_balance.payment_obligations,
+            Error::ContractReserveInsufficientBalance
+        );
+    } else {
+        require!(
+            amount > (contract_data.amount_to_pay_per_month - contract_balance.reserve),
+            Error::AddressInsufficientBalance
+        );
+    }
 
-/// Validates that an investment is eligible for investor self-claim
-pub fn validate_claim(env: &Env, investment: &Investment) -> Result<(), Error> {
-    require!(
-        env.ledger().timestamp() >= investment.claimable_ts, Error::AddressInvestmentIsNotClaimableYet,
-        investment.status != InvestmentStatus::Finished, Error::AddressInvestmentIsFinished
-    );
+    require!(token.balance(owner) >= amount, Error::AddressInsufficientBalance);
     Ok(())
 }

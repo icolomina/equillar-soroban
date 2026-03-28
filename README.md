@@ -1,200 +1,173 @@
-# The Equillar Soroban Contract
+# Equillar — Income-Based Investment Contract
 
 > [!WARNING]
-> This contract is useful for learning and should not be used in production without professional auditing. Please refer to the license for more information.
+> This contract has not been audited. Do not use in production without a professional security review. See the LICENSE for more information.
 
-## Structure
-
-This repository uses the [recommended structure](https://developers.stellar.org/docs/build/smart-contracts/getting-started/hello-world#create-a-new-project) for a Soroban project:
-
-```text
-.
-├── contracts
-│   └── hello_world
-│       ├── src
-│       │   ├── lib.rs
-│       │   └── test.rs
-│       └── Cargo.toml
-├── Cargo.toml
-└── README.md
-```
-
-- New Soroban contracts can be put in `contracts`
-- Contracts should have their own `Cargo.toml` files that rely on the top-level `Cargo.toml` workspace for their dependencies.
-- 
 ## Overview
 
-The Equillar Investment Contract is a Soroban smart contract designed for managing investments on the Stellar network. It enables:
+Equillar is an open-source Soroban smart contract that tokenizes income-based debt instruments on the Stellar network. It enables a project (the borrower) to raise capital from multiple investors, distribute scheduled repayments on-chain, and optionally back obligations with collateral.
 
-- **Capital contributions**: Investors can contribute funds toward a project's funding goal
-- **Time-based Returns**: Investors receive periodic payments (monthly) over a defined period
-- **Flexible Return Models**: Supports both Reverse Loan and Coupon return types
-- **NFT Representation**: Each investment is represented as a Non-Fungible Token (NFT)
-- **Automated Payment Management**: Tracks and processes investor payments with claim mechanisms
-- **Admin Controls**: Owner-controlled operations for payment processing, fund management, and contract pausing
+**Key capabilities:**
 
-The contract uses [OpenZeppelin's Stellar libraries](https://docs.openzeppelin.com/stellar-contracts) for access control (Ownable), pausability, and NFT functionality.
+- **Two return models** — *ReverseLoan*: equal principal + interest instalments each round; *Coupon*: interest-only instalments with full principal returned on the final round.
+- **NFT receipts** — each investment is represented as a Non-Fungible Token, making positions transferable and composable.
+- **Dual-signing transfers** — `add_company_transfer` and `withdrawn` require both the owner and `project_address` to sign the same amount, preventing unilateral fund movement.
+- **Collateral support** — a third party can deposit a collateral token (priced via the Reflector oracle) to back investor obligations; collateral is liquidated proportionally per investor via `pay_with_collateral`.
+- **Pausable** — the owner can pause and unpause all state-changing operations.
 
-## Core Functions
+The contract is built on [OpenZeppelin's Stellar libraries](https://docs.openzeppelin.com/stellar-contracts) for ownership, pausability, and NFT base functionality.
 
-### Initialization
+## Repository Structure
 
-- **`__constructor`**: Initializes the contract with investment parameters (interest rate, funding goal, return type, minimum investment, etc.)
+```
+.
+├── Cargo.toml
+├── README.md
+└── contracts/
+    └── investment-income-based/
+        ├── Cargo.toml
+        ├── Makefile
+        ├── src/
+        │   ├── lib.rs
+        │   ├── contract.rs
+        │   ├── investment.rs
+        │   ├── balance.rs
+        │   ├── collateral.rs
+        │   ├── amounts.rs
+        │   ├── data.rs
+        │   ├── validation.rs
+        │   ├── storage.rs
+        │   ├── events.rs
+        │   └── constants.rs
+        └── tests/
+            ├── common/
+            │   └── mod.rs
+            ├── success_tests.rs
+            └── error_tests.rs
+```
 
-### Investment Functions
+## Contract Parameters
 
-- **`invest`**: Allows users to invest funds. Mints an NFT token ID representing the investment and calculates returns based on the configured parameters
-- **`claim`**: Allows investors to claim all their accumulated pending payments at once (self-service)
+| Parameter | Type | Description |
+|---|---|---|
+| `i_rate` | `u32` | Annual interest rate in basis points (e.g. 500 = 5%). Must be > 0. |
+| `fundraising_days` | `u64` | Duration of the fundraising window in days. |
+| `claim_block_days` | `u64` | Grace period after fundraising before payments can start. |
+| `goal` | `i128` | Maximum capital to raise. Must be > 0. |
+| `return_type` | `u32` | `1` = ReverseLoan, `2` = Coupon. |
+| `return_months` | `u32` | Number of monthly payment rounds. Must be > 0. |
+| `min_per_investment` | `i128` | Minimum amount per individual investment. Must be > 0. |
 
-### Admin Functions (Owner Only)
+## Public Functions
 
-- **`process_investor_payment`**: Processes a single monthly payment to an investor (admin-driven)
-- **`single_withdrawn`**: Withdraws funds from the project balance to the project address
-- **`add_company_transfer`**: Adds funds from the admin to the reserve balance for upcoming payments
-- **`move_funds_to_the_reserve`**: Internally moves funds from project balance to reserve balance
-- **`get_contract_balance`**: Retrieves current contract balance breakdown (project, reserve, commission)
-- **`check_reserve_balance`**: Calculates additional funds needed for upcoming payments (within next week)
+### Constructor
 
-### Pausable Functions
+| Function | Auth | Description |
+|---|---|---|
+| `__constructor` | owner | Initializes the contract, validates parameters, sets NFT metadata, and stores `ContractData`. |
 
-- **`pause`**: Pauses the contract, preventing investments and payments
-- **`unpause`**: Resumes contract operations
+### Investment
+
+| Function | Auth | Description |
+|---|---|---|
+| `invest(addr, amount)` | investor | Transfers tokens from investor to contract, mints an NFT receipt, and records the investment with pre-calculated repayment schedule. |
+
+### Payment Lifecycle
+
+| Function | Auth | Description |
+|---|---|---|
+| `add_company_transfer(amount)` | owner + project_address | Deposits funds into the reserve for the upcoming payment round. Enforces final-round coverage for Coupon investments. Advances `next_payment_round`. |
+| `process_investor_payment(token_id)` | owner | Pays the current round's instalment to the NFT holder. Marks investment completed after the last round. |
+
+### Fund Management
+
+| Function | Auth | Description |
+|---|---|---|
+| `withdrawn(amount)` | owner + project_address | Transfers project funds to `project_address` after the fundraising period ends. |
+| `get_contract_balance()` | owner | Returns the current `ContractBalance` breakdown. |
+
+### Collateral
+
+| Function | Auth | Description |
+|---|---|---|
+| `add_collateral(token, amount, symbol, addr)` | collateral_addr | Deposits collateral tokens. Only one token type allowed per contract. Coverage level is computed via the Reflector oracle. |
+| `pay_with_collateral(token_id)` | owner + project_address | Liquidates the investor's pro-rata collateral share and marks the investment completed. |
+| `return_collateral_to_company()` | owner | Returns the entire remaining collateral balance to the collateral provider. |
+
+### Pausable
+
+| Function | Auth | Description |
+|---|---|---|
+| `pause(caller)` | owner | Pauses all state-changing operations. |
+| `unpause(caller)` | owner | Resumes normal operation. |
 
 ## Modules
 
 ### `contract.rs`
-The main contract implementation containing all public functions and business logic for the `InvestmentContract`.
+Main contract entry point. Contains all public functions and orchestrates calls to validation, storage, balance accounting, and event emission.
 
 ### `investment.rs`
-Defines the `Investment` struct and related logic for individual investments, including:
-- Investment creation
-- Payment processing
-- Return calculations
-- Support for two return types: **Reverse Loan** (principal + interest distributed evenly) and **Coupon** (interest-only payments with final principal payment)
+Defines the `Investment` struct and its payment logic. Handles both ReverseLoan and Coupon payment calculations, including the final-round principal return for Coupon investments.
 
 ### `balance.rs`
-Manages contract balance accounting with the `ContractBalance` struct:
-- Tracks reserve balance (for investor payments)
-- Tracks project balance (for company withdrawal)
-- Tracks commission balance
-- Implements progressive commission rates based on investment amount
-- Provides balance recalculation methods for various operations
-- Uses OpenZeppelin's `Wad` library for high-precision fixed-point arithmetic (18 decimals) to accurately calculate commission splits and reserve allocations without rounding errors
+Tracks all on-chain accounting via `ContractBalance`: reserve, project, commission, payment_obligations, collateral positions, and historical totals. All mutations go through dedicated `recalculate_from_*` methods.
 
-### `claim.rs`
-Handles payment claim scheduling and calculations:
-- `Claim` struct stores next payment timestamp and amount
-- Calculates how many payment periods have elapsed since the last claim
-- Determines when payments become available
+### `amounts.rs`
+Computes the split of an investment into project funds, reserve fund, and commission using a progressive commission rate based on investment size.
+
+### `collateral.rs`
+Defines the `Collateral` struct, the `ReflectorOracle` interface, and helpers for computing collateral coverage level and per-investor collateral entitlements.
 
 ### `data.rs`
-Core data structures and configuration:
-- `ContractData`: Stores contract-level configuration (interest rate, goal, return type, token address, etc.)
-- `State` enum: Tracks contract state (Active, FundsReached)
-- `InvestmentContractParams`: Constructor parameters
+Core configuration struct `ContractData` (derived from constructor parameters) and `InvestmentContractParams` used during initialization.
 
 ### `validation.rs`
-Centralized validation logic and error definitions:
-- Validates investment amounts, balances, and timing constraints
-- Defines the `Error` enum with all possible contract errors
-- Ensures business rules are enforced (e.g., minimum investment, payment timing, goal limits)
+Centralizes all guard logic and defines the `Error` enum. Key validators: `validate_constructor_params`, `validate_investment`, `validate_withdrawal`, `validate_company_transfer` (including the final Coupon round check), `validate_reserve_balance`.
 
 ### `storage.rs`
-Storage management layer providing read/write operations for:
-- Contract data
-- Individual investments
-- Claims map
-- Contract balances
-- Uses Soroban's persistent storage primitives
+Typed read/write wrappers over Soroban's persistent storage for `ContractData`, `ContractBalance`, individual `Investment` records, `Collateral`, and the `next_payment_round` counter.
+
+### `events.rs`
+Emits structured contract events for all significant state transitions (investment received, payment sent, withdrawal, collateral deposited/liquidated/returned, goal reached, contract deployed).
 
 ### `constants.rs`
-Defines time constants used throughout the contract:
-- `SECONDS_IN_DAY`, `SECONDS_IN_WEEK`, `SECONDS_IN_MONTH`
-
-### `lib.rs`
-The crate root that exports the contract and serves as the entry point for the Soroban WebAssembly module.
+Defines `SECONDS_IN_DAY` used for timestamp arithmetic.
 
 ## Tests
 
-The test suite is organized into multiple files for better maintainability:
-
-### Test Structure
-
 ```
 tests/
-├── common/
-│   └── mod.rs           # Shared test utilities and helper functions
-├── error_tests.rs       # Tests for error conditions and validation
-└── success_tests.rs     # Tests for successful operations
+├── common/mod.rs       # Shared helpers: create_investment_contract, create_token_contract,
+│                       # do_payment_round, assert_contract_balance, ReflectorMock
+├── success_tests.rs    # 14 tests covering happy-path flows
+└── error_tests.rs      # 20 tests covering all error conditions
 ```
 
-### `common/mod.rs`
-Contains shared test utilities used across all test files:
-- **`create_investment_contract`**: Sets up a test environment with contract, token, and addresses
-- **`create_token_contract`**: Creates a Stellar Asset Contract for testing
-- **`TestData` struct**: Encapsulates all test context (addresses, clients, tokens)
-- Helper functions for common test scenarios like minting tokens and making investments
+Run all 34 tests:
 
-### `error_tests.rs` (19 tests)
-Tests that verify the contract properly handles error conditions:
-- **Constructor validation errors**: Invalid parameters (zero interest rate, zero goal, invalid return type, etc.)
-- **Investment errors**: Amount below minimum, insufficient balance, goal exceeded, contract paused
-- **Payment processing errors**: Invalid token IDs, insufficient reserve, payment timing violations
-- **Authorization errors**: Unauthorized pause/unpause, unauthorized withdrawals
-- **Withdrawal errors**: Insufficient balances for various operations
-
-Each test uses `#[should_panic]` to verify the contract panics with the expected error.
-
-### `success_tests.rs` (18 tests)
-Tests that verify successful contract operations:
-- **Commission calculation**: Tests the progressive commission rate algorithm
-- **Investment flows**: Both Reverse Loan and Coupon return types
-- **Balance management**: Contract balance tracking, reserve calculations, fund movements
-- **Payment processing**: Single and multiple payment claims
-- **Pausable functionality**: Pause and unpause operations
-- **Admin operations**: Withdrawals, company transfers, fund movements
-- **Multi-investor scenarios**: Multiple investments from the same user, goal limits
-
-## Building and Testing
-
-### Prerequisites
-
-Ensure you have the Stellar/Soroban development environment set up:
-- Rust toolchain
-- Soroban CLI
-- Required dependencies from `Cargo.toml`
-
-For detailed setup instructions, refer to the [Stellar documentation](https://developers.stellar.org/docs/build/smart-contracts/getting-started/setup).
-
-### Running Tests
-
-Run all tests (37 total):
 ```bash
 cargo test
 ```
 
-Run specific test files:
+Run a specific suite:
+
 ```bash
-cargo test --test error_tests
 cargo test --test success_tests
+cargo test --test error_tests
 ```
 
-Run a specific test:
-```bash
-cargo test test_investment_reverse_loan
-```
+## Building
 
-### Building the Contract
-
-Build for development (unoptimized):
 ```bash
+# Development build
 cargo build
-```
 
-And then generate the wasm file:
-```bash
+# Optimised WASM for deployment
 stellar contract build
 ```
 
-Deploy to Stellar testnet using the Soroban CLI. Refer to the [official deployment guide](https://developers.stellar.org/docs/build/smart-contracts/getting-started/deploy-to-testnet) for detailed instructions.
+For testnet deployment refer to the [Stellar deployment guide](https://developers.stellar.org/docs/build/smart-contracts/getting-started/deploy-to-testnet).
 
+## License
+
+Apache 2.0. See [LICENSE](LICENSE).

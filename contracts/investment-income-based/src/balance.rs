@@ -1,4 +1,4 @@
-use soroban_sdk::{contractevent, contracttype, Env};
+use soroban_sdk::contracttype;
 
 use crate::{amounts::Amount, investment::Investment};
 
@@ -15,22 +15,8 @@ pub struct ContractBalance {
     pub moved_from_project_to_reserve: i128,
     pub payment_obligations: i128,
     pub collateral_received: i128,
-    pub collateral_liquidated: i128
-}
-
-#[contractevent(topics = ["CBUPDATED"])]
-pub struct ContractBalanceUpdated {
-    pub reserve: i128,
-    pub project: i128,
-    pub comission: i128,
-    pub received_so_far: i128,
-    pub payments: i128,
-    pub reserve_contributions: i128,
-    pub project_withdrawals: i128,
-    pub moved_from_project_to_reserve: i128,
-    pub payment_obligations: i128,
-    pub collateral_received: i128,
-    pub collateral_liquidated: i128
+    pub collateral_liquidated: i128,
+    pub collateral_returned: i128
 }
 
 impl Default for ContractBalance {
@@ -52,7 +38,9 @@ impl ContractBalance {
             moved_from_project_to_reserve: 0_i128,
             payment_obligations: 0_i128,
             collateral_received: 0_i128,
-            collateral_liquidated: 0_i128
+            collateral_liquidated: 0_i128,
+            collateral_returned: 0_i128
+
         }
     }
 
@@ -96,25 +84,11 @@ impl ContractBalance {
 
     pub fn recalculate_from_collateral_liquidated(&mut self, amount: &i128) {
         self.collateral_liquidated += amount;
-        self.collateral_received -= amount;
     }
 
-    /// Emits a ContractBalancesUpdated event
-    pub fn emit_event(&self, env: &Env) {
-        ContractBalanceUpdated {
-            reserve: self.reserve,
-            project: self.project,
-            comission: self.comission,
-            received_so_far: self.received_so_far,
-            payments: self.payments,
-            reserve_contributions: self.reserve_contributions,
-            project_withdrawals: self.project_withdrawals,
-            moved_from_project_to_reserve: self.moved_from_project_to_reserve,
-            payment_obligations: self.payment_obligations,
-            collateral_received: self.collateral_received,
-            collateral_liquidated: self.collateral_liquidated
-        }
-        .publish(env);
+    pub fn recalculate_from_collateral_returned(&mut self, amount: &i128) {
+        self.collateral_returned += amount;
     }
+    
 }
 
