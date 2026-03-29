@@ -2,13 +2,6 @@ use soroban_sdk::{Address, Env, contracttype};
 
 use crate::{constants::SECONDS_IN_DAY, investment::InvestmentReturnType};
 
-pub trait FromNumber {
-    fn from_number<N>(number: N) -> Option<Self>
-    where
-        Self: Sized,
-        N: Into<u32>;
-}
-
 #[contracttype]
 pub struct InvestmentContractParams {
     pub i_rate: u32,
