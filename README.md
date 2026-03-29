@@ -9,9 +9,11 @@ Equillar is an open-source Soroban smart contract that tokenizes income-based de
 
 **Key capabilities:**
 
-- **Two return models** — *ReverseLoan*: equal principal + interest instalments each round; *Coupon*: interest-only instalments with full principal returned on the final round.
+- **Two return models** 
+   -   *ReverseLoan*: equal principal + interest instalments each round. 
+   -   *Coupon*: interest-only instalments with full principal returned on the final round.
 - **NFT receipts** — each investment is represented as a Non-Fungible Token, making positions transferable and composable.
-- **Dual-signing transfers** — `add_company_transfer` and `withdrawn` require both the owner and `project_address` to sign the same amount, preventing unilateral fund movement.
+- **Dual-signing transfers** — `add_company_transfer` and `withdrawn` require both the owner and the project_address to sign the same amount, preventing unilateral fund movement.
 - **Collateral support** — a third party can deposit a collateral token (priced via the Reflector oracle) to back investor obligations; collateral is liquidated proportionally per investor via `pay_with_collateral`.
 - **Pausable** — the owner can pause and unpause all state-changing operations.
 
