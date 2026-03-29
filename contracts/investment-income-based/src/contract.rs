@@ -1,6 +1,6 @@
 // use soroban_sdk::storage::Storage;
 use soroban_sdk::token::TokenClient;
-use soroban_sdk::{Address, Env, IntoVal, String, contract, contractimpl, log, token, vec};
+use soroban_sdk::{Address, Env, IntoVal, String, contract, contractimpl, token, vec};
 use stellar_access::ownable::{self as ownable};
 use stellar_contract_utils::pausable::{self as pausable, Pausable};
 use stellar_macros::{only_owner, when_not_paused};

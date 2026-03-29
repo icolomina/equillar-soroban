@@ -1,4 +1,4 @@
-use soroban_sdk::{Address, Env, contracttype, log};
+use soroban_sdk::{Address, Env, contracttype};
 
 use crate::{constants::SECONDS_IN_DAY, investment::InvestmentReturnType};
 

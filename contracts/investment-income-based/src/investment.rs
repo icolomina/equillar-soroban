@@ -2,7 +2,7 @@ use crate::{
     amounts::Amount,
     data::ContractData
 };
-use soroban_sdk::{contracttype, Env};
+use soroban_sdk::{contracttype};
 
 #[contracttype]
 #[derive(Copy, Clone)]
