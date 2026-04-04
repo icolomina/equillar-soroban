@@ -43,6 +43,16 @@ pub enum Error {
     OnlyOneCollateralTokenAllowed = 34,
     CollateralNotConfigured = 36,
     CollateralBalanceIsEmpty = 37,
+
+    // -- Emergency payment --
+    EmptyReserve = 44,
+    EmptyPaymentObligations = 45,
+
+    // -- Refund --
+    EmptyRefundAmount = 46,
+
+    // -- Company transfer owner balance --
+    OwnerInsufficientBalance = 47,
 }
 
 /// Macro for validation checks with early return on error
@@ -62,7 +72,7 @@ macro_rules! require {
     };
 }
 
-/// Validates constructor parameters for contract initialization
+/// Validates constructor numeric constraints.
 pub fn validate_constructor_params(
     i_rate: u32,
     goal: i128,
@@ -78,7 +88,8 @@ pub fn validate_constructor_params(
     Ok(())
 }
 
-/// Validates that there is sufficient reserve balance for payment
+/// Validates whether an investor payment can be processed for current round.
+/// Checks round synchronization and reserve sufficiency.
 pub fn validate_reserve_balance(
     amount_to_transfer: i128,
     investment: &Investment,
@@ -92,7 +103,7 @@ pub fn validate_reserve_balance(
     Ok(())
 }
 
-/// Validates investment parameters before accepting investment
+/// Validates investment eligibility before accepting funds.
 pub fn validate_investment(
     amount: i128,
     contract_data: &ContractData,
@@ -109,7 +120,42 @@ pub fn validate_investment(
     Ok(())
 }
 
-/// Validates sufficient project balance for withdrawal
+/// Validates that an investor refund can proceed.
+///
+/// * `FundrasingTimeExceeded` if fundraising has ended.
+/// * `InvestmentCompleted` if the investment is already closed.
+/// * `EmptyRefundAmount` if there is nothing to refund.
+pub fn validate_refund_investor(investment: &Investment, contract_data: &ContractData, amount_to_refund: i128, current_ts: u64) -> Result<(), Error> {
+    require!(
+        current_ts < contract_data.ts_fundraising_ends, Error::FundrasingTimeExceeded,
+        !investment.completed, Error::InvestmentCompleted,
+        amount_to_refund > 0, Error::EmptyRefundAmount
+    );
+    Ok(())
+}
+
+/// Validates that an emergency proportional payment can proceed.
+///
+/// * `FundrasingTimeOngoingYet` if the fundraising period has not ended yet.
+/// * `InvestmentCompleted` if the investment is already closed.
+/// * `EmptyReserve` if reserve is zero.
+/// * `EmptyPaymentObligations` if there are no pending obligations.
+pub fn validate_emergency_payment(
+    investment: &Investment,
+    contract_balance: &ContractBalance,
+    current_ts: u64,
+    contract_data: &ContractData,
+) -> Result<(), Error> {
+    require!(
+        current_ts > contract_data.ts_fundraising_ends, Error::FundrasingTimeOngoingYet,
+        !investment.completed, Error::InvestmentCompleted,
+        contract_balance.reserve > 0, Error::EmptyReserve,
+        contract_balance.payment_obligations > 0, Error::EmptyPaymentObligations
+    );
+    Ok(())
+}
+
+/// Validates project withdrawal constraints.
 pub fn validate_withdrawal(amount: i128, project_balance: i128, current_ts: u64, contract_data: &ContractData) -> Result<(), Error> {
     require!(
         current_ts > contract_data.ts_fundraising_ends, Error::FundrasingTimeOngoingYet,
@@ -117,13 +163,23 @@ pub fn validate_withdrawal(amount: i128, project_balance: i128, current_ts: u64,
     );
     Ok(())
 }
+/// Validates whether commission withdrawal can proceed.
+pub fn validate_withdrawal_commission(amount: i128, current_ts: u64, contract_data: &ContractData) -> Result<(), Error> {
+    require!(
+        current_ts > contract_data.ts_fundraising_ends, Error::FundrasingTimeOngoingYet,
+        amount > 0, Error::ContractInsufficientBalance
+    );
+    Ok(())
+}
 
-/// Validates sufficient balance for company transfer.
+/// Validates company transfer constraints.
 ///
 /// For any round except the last, verifies the transfer covers the monthly interest shortfall.
-/// For the last round, verifies the reserve after the transfer covers all remaining
+/// For the last round, verifies reserve after transfer covers all remaining
 /// `payment_obligations` — this is critical for Coupon investments where the final payment
 /// also returns the full deposited principal.
+///
+/// Also validates owner token balance with `OwnerInsufficientBalance`.
 pub fn validate_company_transfer(
     e: &Env,
     token: &TokenClient,
@@ -144,11 +200,11 @@ pub fn validate_company_transfer(
         );
     } else {
         require!(
-            amount > (contract_data.amount_to_pay_per_month - contract_balance.reserve),
-            Error::AddressInsufficientBalance
+            amount >= (contract_data.amount_to_pay_per_month - contract_balance.reserve),
+            Error::ContractReserveInsufficientBalance
         );
     }
 
-    require!(token.balance(owner) >= amount, Error::AddressInsufficientBalance);
+    require!(token.balance(owner) >= amount, Error::OwnerInsufficientBalance);
     Ok(())
 }

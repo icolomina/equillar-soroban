@@ -6,6 +6,11 @@ const LOWER_DIVISOR: u32 = 10;
 const UPPER_DIVISOR: u32 = 60;
 const AMOUNT_PER_COMMISSION_REDUCTION: i128 = 400;
 
+/// Calculates the dynamic commission denominator for an investment amount.
+///
+/// The denominator starts at `LOWER_DIVISOR` for small amounts and increases
+/// by steps of 1 every `AMOUNT_PER_COMMISSION_REDUCTION` tokens above
+/// `LOWER_AMOUNT_FOR_COMMISSION_REDUCTION`, capped at `UPPER_DIVISOR`.
 pub fn calculate_rate_denominator(amount: &i128, decimals: u32) -> u32 {
     let scale_factor = 10_i128.pow(decimals);
     let token_amount = amount / scale_factor;
@@ -29,10 +34,22 @@ pub struct Amount {
 }
 
 impl Amount {
+    /// Returns amount effectively allocated to investment flow
+    /// (`project + reserve`, excluding commission).
     pub fn get_invested_amount(&self) -> i128 {
         self.amount_to_invest + self.amount_to_reserve_fund
     }
 
+    /// Splits an investment amount into commission, reserve, and project buckets.
+    ///
+    /// Uses OpenZeppelin `Wad` math helpers for fixed-point calculations:
+    /// * commission uses `i_rate / (rate_denominator * 10_000)`
+    /// * reserve is fixed at 5%
+    /// * project receives the remainder
+    ///
+    /// # Panics
+    ///
+    /// Panics if token decimals do not fit into `u8` for `Wad` conversion.
     pub fn from_investment(e: &Env, amount: &i128, i_rate: &u32, decimals: u32) -> Amount {
         let rate_denominator: u32 = calculate_rate_denominator(amount, decimals);
 

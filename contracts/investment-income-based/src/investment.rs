@@ -8,6 +8,8 @@ use soroban_sdk::{contracttype};
 #[derive(Copy, Clone)]
 pub struct Investment {
     pub deposited: i128,
+    pub amount_invested: i128,
+    pub amount_to_reserve: i128,
     pub commission: i128,
     pub accumulated_interests: i128,
     pub total: i128,
@@ -19,6 +21,13 @@ pub struct Investment {
 }
 
 impl Investment {
+    /// Builds a new investment snapshot from contract configuration and amount split.
+    ///
+    /// Derives:
+    /// * `deposited` as investable amount plus reserve contribution.
+    /// * `accumulated_interests` from `interest_rate`.
+    /// * `total` as principal plus interests.
+    /// * `regular_payment` according to the configured return type.
     pub fn new(cd: &ContractData, amounts: &Amount, token_id: u32) -> Self {
         let real_amount = amounts.amount_to_invest + amounts.amount_to_reserve_fund;
         let current_interest = (real_amount * cd.interest_rate as i128) / 100 / 100;
@@ -32,6 +41,8 @@ impl Investment {
 
         Investment {
             deposited: real_amount,
+            amount_invested: amounts.amount_to_invest,
+            amount_to_reserve: amounts.amount_to_reserve_fund,
             commission: amounts.amount_to_commission,
             accumulated_interests: current_interest,
             total: total_gains,
@@ -43,6 +54,16 @@ impl Investment {
         }
     }
 
+    /// Applies one payment round to this investment and returns the transfer amount.
+    ///
+    /// Increments `payments_transferred`, updates `paid`, and marks investment as
+    /// completed when the last round is reached. For `Coupon`, the last round also
+    /// returns full principal (`deposited`).
+    ///
+    /// # Edge cases
+    ///
+    /// Integer division in `regular_payment` can leave minimal rounding dust between
+    /// `paid` and theoretical totals depending on configuration.
     pub fn process_investment_payment(&mut self, contract_data: &ContractData) -> i128 {
         let mut amount_to_transfer: i128;
 
@@ -64,6 +85,20 @@ impl Investment {
         amount_to_transfer
     }
 
+    /// Returns the refundable amount (`deposited + commission`).
+    ///
+    /// Used by the fundraising-time refund path.
+    pub fn get_amount_to_refund(self) -> i128 {
+        let amount_to_refund = self.deposited + self.commission;
+        amount_to_refund
+    }
+
+    /// Computes per-round scheduled payment for the selected return type.
+    ///
+    /// * `Coupon`: interest-only monthly amount.
+    /// * `ReverseLoan`: principal + interest spread over all rounds.
+    ///
+    /// Uses integer division and therefore truncates fractional remainders.
     fn calculate_regular_payment(
         interest_gains: &i128,
         total_gains: &i128,
@@ -86,6 +121,11 @@ pub enum InvestmentReturnType {
 }
 
 impl InvestmentReturnType {
+    /// Converts numeric contract input into a typed `InvestmentReturnType`.
+    ///
+    /// Accepted values:
+    /// * `1` => `ReverseLoan`
+    /// * `2` => `Coupon`
     pub fn from_number<N>(value: N) -> Option<InvestmentReturnType>
     where
         N: Into<u32>,

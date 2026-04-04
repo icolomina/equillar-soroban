@@ -65,7 +65,6 @@ fn test_constructor_min_investment_zero() {
     create_investment_contract(&e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 0_i128, true);
 }
 
-// ==================== Investment Error Tests ====================
 
 /// Verifies that `add_company_transfer` is rejected with `NextPaymentCannotBeScheduledYet` (#43)
 /// when called before `ts_payments_start` has been reached.
@@ -106,8 +105,9 @@ fn test_call_process_investor_payment_without_previous_company_transfer() {
     test_data.client.process_investor_payment(&inv.token_id);
 }   
 
-/// Verifies that investing beyond the funding goal is rejected with `GoalAlreadyReached` (#31):
-/// fills the goal nearly to capacity and then tries a third investment that would exceed it.
+/// Verifies that investing beyond the funding goal is rejected with error `#30`.
+/// The test fills the goal close to capacity and then performs one extra
+/// investment that pushes `received_so_far` over the configured goal.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #30)")]
 fn test_goal_reached() {
@@ -188,7 +188,6 @@ fn test_invest_after_fundraising_period() {
     test_data.client.invest(&test_data.user, &1000);
 }
 
-// ==================== Payment Processing Error Tests ====================
 
 /// Verifies that `add_company_transfer` is rejected with `ContractReserveInsufficientBalance` (#2)
 /// on the final payment round when the reserve is insufficient to cover the full Coupon payout.
@@ -270,7 +269,6 @@ fn test_process_investor_payment_already_completed() {
 
 
 
-// ==================== Withdrawal Error Tests ====================
 
 /// Verifies that `withdrawn` is rejected with `FundrasingTimeOngoingYet` (#39)
 /// when called before the fundraising deadline has passed.
@@ -330,12 +328,11 @@ fn test_withdrawn_insufficient_project_balance() {
 
 
 
-// ==================== Transfer Error Tests ====================
 
-/// Verifies that `add_company_transfer` is rejected with `AddressInsufficientBalance` (#1)
+/// Verifies that `add_company_transfer` is rejected with `OwnerInsufficientBalance` (#47)
 /// when the admin has no tokens to transfer.
 #[test]
-#[should_panic(expected = "HostError: Error(Contract, #1)")]
+#[should_panic(expected = "HostError: Error(Contract, #47)")]
 fn test_add_company_transfer_insufficient_balance() {
     let e = Env::default();
     let test_data = create_investment_contract(
@@ -357,7 +354,8 @@ fn test_add_company_transfer_insufficient_balance() {
 
 
 /// Verifies that `add_collateral` is rejected with `AddressInsufficientBalance` (#1)
-/// when the collateral provider has no collateral tokens.
+/// when the collateral provider has no balance in the collateral token.
+/// No mint is performed for `collateral_addr`, so the transfer must fail.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #1)")]
 fn test_add_collateral_insufficient_balance() {
@@ -429,7 +427,7 @@ fn test_add_collateral_only_one_collateral_token_allowed() {
 }
 
 /// Verifies that `pay_with_collateral` is rejected with `CollateralNotConfigured` (#36)
-/// when no collateral has been registered for the contract.
+/// when no collateral configuration exists in storage.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #36)")]
 fn test_pay_with_collateral_not_configured() {
@@ -453,9 +451,9 @@ fn test_pay_with_collateral_not_configured() {
 }
 
 /// Verifies that `return_collateral_to_company` is rejected with `CollateralBalanceIsEmpty` (#37)
-/// when collateral has been configured but its balance in the contract is zero.
-/// A single investor's `pay_with_collateral` drains the full collateral balance
-/// (they represent 100% of payment_obligations), leaving nothing to return.
+/// when collateral is configured but the contract no longer holds collateral tokens.
+/// A single investor receives all configured collateral via `pay_with_collateral`,
+/// leaving zero balance for the return path.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #37)")]
 fn test_return_collateral_when_empty() {
@@ -492,3 +490,190 @@ fn test_return_collateral_when_empty() {
 }
 
 
+/// Verifies that `refund_investor` is rejected with `AddressHasNotInvested` (#14)
+/// when the given `token_id` does not correspond to any investment.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #14)")]
+fn test_refund_investor_address_has_not_invested() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    test_data.client.refund_investor(&999_u32);
+}
+
+/// Verifies that `refund_investor` is rejected with `FundrasingTimeExceeded` (#40)
+/// when called after `ts_fundraising_ends`.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #40)")]
+fn test_refund_investor_fundraising_ended() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let u: Address = Address::generate(&e);
+    test_data.token_admin.mint(&u, &1000);
+    let inv = test_data.client.invest(&u, &1000);
+
+    e.ledger().set_timestamp(8 * 86400);
+
+    test_data.client.refund_investor(&inv.token_id);
+}
+
+/// Verifies that `refund_investor` is rejected with `InvestmentCompleted` (#38)
+/// when called a second time on an already-refunded investment.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #38)")]
+fn test_refund_investor_already_refunded() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let u: Address = Address::generate(&e);
+    test_data.token_admin.mint(&u, &1000);
+    let inv = test_data.client.invest(&u, &1000);
+
+    e.ledger().set_timestamp(3 * 86400);
+
+    test_data.client.refund_investor(&inv.token_id);
+    test_data.client.refund_investor(&inv.token_id);
+}
+
+
+/// Verifies that `withdrawn_commissions` is rejected with `FundrasingTimeOngoingYet` (#39)
+/// when called before the fundraising deadline has passed.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #39)")]
+fn test_withdrawn_commissions_while_fundraising_ongoing() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let u: Address = Address::generate(&e);
+    test_data.token_admin.mint(&u, &1000);
+    test_data.client.invest(&u, &1000);
+
+    e.ledger().set_timestamp(3 * 86400);
+    test_data.client.withdrawn_commissions();
+}
+
+/// Verifies that `withdrawn_commissions` is rejected with `ContractInsufficientBalance` (#3)
+/// when there is no pending commission to withdraw (no investments made).
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #3)")]
+fn test_withdrawn_commissions_no_available_commission() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    e.ledger().set_timestamp(8 * 86400);
+    test_data.client.withdrawn_commissions();
+}
+
+/// Verifies that a second call to `withdrawn_commissions` is rejected with
+/// `ContractInsufficientBalance` (#3) once all accumulated commission has
+/// already been withdrawn.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #3)")]
+fn test_withdrawn_commissions_already_fully_withdrawn() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let u: Address = Address::generate(&e);
+    test_data.token_admin.mint(&u, &1000);
+    test_data.client.invest(&u, &1000);
+
+    e.ledger().set_timestamp(8 * 86400);
+    test_data.client.withdrawn_commissions();
+
+    test_data.client.withdrawn_commissions();
+}
+
+
+/// Verifies that `emergency_pay_investor` is rejected with `AddressHasNotInvested` (#14)
+/// when the given `token_id` does not correspond to any investment.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #14)")]
+fn test_emergency_pay_investor_address_has_not_invested() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    e.ledger().set_timestamp(8 * 86400);
+    test_data.client.emergency_pay_investor(&999_u32);
+}
+
+/// Verifies that `emergency_pay_investor` is rejected with `FundrasingTimeOngoingYet` (#39)
+/// when called before the fundraising period has ended.
+/// Emergency payouts are only enabled after fundraising closes.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #39)")]
+fn test_emergency_pay_investor_fundraising_ongoing() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let u: Address = Address::generate(&e);
+    test_data.token_admin.mint(&u, &1000);
+    let inv = test_data.client.invest(&u, &1000);
+
+    e.ledger().set_timestamp(3 * 86400);
+    test_data.client.emergency_pay_investor(&inv.token_id);
+}
+
+/// Verifies that `emergency_pay_investor` is rejected with `InvestmentCompleted` (#38)
+/// when called on an investment that has already been processed.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #38)")]
+fn test_emergency_pay_investor_already_completed() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let u: Address = Address::generate(&e);
+    test_data.token_admin.mint(&u, &1000);
+    let inv = test_data.client.invest(&u, &1000);
+
+    e.ledger().set_timestamp(8 * 86400);
+    test_data.client.emergency_pay_investor(&inv.token_id);
+    test_data.client.emergency_pay_investor(&inv.token_id);
+}
+
+/// Verifies that `emergency_pay_investor` is rejected with `EmptyReserve` (#44)
+/// when reserve is fully drained by a prior normal payment.
+///
+/// Setup: a 2-round ReverseLoan where round 1 is funded exactly to pay once.
+/// After processing round 1, reserve becomes zero while the investment remains
+/// incomplete, so the emergency path must fail with `EmptyReserve`.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #44)")]
+fn test_emergency_pay_investor_empty_reserve() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 2_u32, 100_i128, true,
+    );
+
+    let u = Address::generate(&e);
+    test_data.token_admin.mint(&u, &1000);
+    let inv = test_data.client.invest(&u, &1000);
+
+    test_data.token_admin.mint(&test_data.project_address, &472);
+    test_data.token.transfer(&test_data.project_address, &test_data.admin, &472);
+
+    e.ledger().set_timestamp(15 * 86400);
+
+    test_data.client.add_company_transfer(&472);
+    test_data.client.process_investor_payment(&inv.token_id);
+
+    test_data.client.emergency_pay_investor(&inv.token_id);
+}

@@ -31,6 +31,15 @@ pub struct ContractData {
 }
 
 impl ContractData {
+    /// Builds internal `ContractData` from constructor parameters.
+    ///
+    /// Derives fundraising and payment start timestamps using day-based offsets
+    /// over current ledger timestamp.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `params.return_type` is invalid. This function is expected to be
+    /// called only after constructor validation has accepted the return type.
     pub fn from_investment_contract_params(
         env: &Env,
         params: &InvestmentContractParams,

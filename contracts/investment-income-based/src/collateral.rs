@@ -32,18 +32,20 @@ pub struct Collateral {
     pub collateral_level: u32,
 }
 
-/// Calculates the collateral coverage level as a percentage (basis points, 2 decimals).
-/// 
-/// Formula: (collateral_amount * collateral_price) / payment_obligations
-/// Returns a value in basis points, e.g. 8160 = 81.60%
-/// 
-/// Wad "from_token_amount" and "to_token_amount" functions requires u8 numbers. Althougth this function receives
-/// both collateral_decimals and contract_token_decimals as u32, they will fit into u8 numbers son decimal tokens will never exceed
-/// 255
-/// 
-/// Returns None if:
-/// - The oracle has no price for the asset
-/// - payment_obligations is zero (no investors yet)
+/// Calculates collateral coverage level in basis points.
+///
+/// Formula:
+/// `level_bps = collateral_value_in_contract_token * 10_000 / payment_obligations`.
+///
+/// Example: `8160` means `81.60%` coverage.
+///
+/// Uses OpenZeppelin `Wad` helpers for decimal-safe conversion between token units.
+///
+/// # Returns
+///
+/// * `Some(level)` when pricing is available.
+/// * `Some(100_000)` when `payment_obligations == 0` (sentinel high coverage value).
+/// * `None` when oracle has no price for the pair.
 pub fn calculate_collateral_level(
     env: &Env,
     oracle_addr: &Address,
@@ -76,6 +78,16 @@ pub fn calculate_collateral_level(
     Some(level as u32)
 }
 
+/// Calculates the investor's proportional collateral payout.
+///
+/// Uses the investor's pending obligations ratio:
+/// `investment_remaining / contract_payment_obligations`,
+/// then applies that ratio to current `collateral_amount`.
+///
+/// # Preconditions
+///
+/// `contract_balance.payment_obligations` must be strictly positive.
+/// Callers should enforce this before invoking the function.
 pub fn get_collateral_for_investment(
     env : &Env, 
     investment: &Investment, 

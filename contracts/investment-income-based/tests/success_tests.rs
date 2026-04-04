@@ -359,10 +359,9 @@ fn test_withdrawn() {
     assert_contract_balance(&test_data, 45, 50, 5, 0, 995, 0);
 }
 
-/// Verifies that `add_company_transfer` enforces dual authorization:
-/// both the owner (admin) and project_address must authorize the call,
-/// and critically, both must sign the exact same amount — preventing a
-/// compromised party from substituting a different value in their signature.
+/// Verifies that `add_company_transfer` requests authorization from both
+/// required actors: owner (`admin`) and `project_address`.
+/// The test inspects `e.auths()` to ensure both addresses participated.
 #[test]
 fn test_add_company_transfer_authorization_verification() {
     let e = Env::default();
@@ -390,9 +389,9 @@ fn test_add_company_transfer_authorization_verification() {
     assert!(project_auth.is_some(), "project_address auth must be requested");
 }
 
-/// Verifies that `withdrawn` enforces dual authorization:
-/// both the owner (admin) and project_address must sign the call,
-/// and both must authorize the exact same amount.
+/// Verifies that `withdrawn` requests authorization from both required actors:
+/// owner (`admin`) and `project_address`.
+/// The test validates the presence of both signers in `e.auths()`.
 #[test]
 fn test_withdrawn_authorization_verification() {
     let e = Env::default();
@@ -422,8 +421,8 @@ fn test_withdrawn_authorization_verification() {
 /// state independently (paid, payments_transferred, completed).
 /// A single `add_company_transfer` covering that round`s obligations allows
 /// each investment to be paid via `process_investor_payment` independently:
-/// inv2 can still be paid in the same round as inv1 because
-/// `next_payment_round=1` while `inv2.payments_transferred` is still 0.
+/// `inv2` can still be paid in the same round as `inv1` because payment progress
+/// is tracked per investment (`payments_transferred`) rather than per user.
 #[test]
 fn test_invest_same_user_multiple_times() {
     let e = Env::default();
@@ -465,9 +464,74 @@ fn test_invest_same_user_multiple_times() {
     assert_eq!(inv2_after.paid, 261_i128);
 }
 
-/// Verifies that owner-gated functions (`pause`, `unpause`) request
-/// authorization from the admin address and only from the admin address,
-/// inspecting `e.auths()` after each call.
+/// Verifies that `refund_investor` transfers back the full original investment
+/// (deposited + commission) to the NFT holder, marks the investment as completed,
+/// and updates `refunded_to_investor` in the contract balance.
+/// For a 1000-token investment: commission=5, deposited=995, so refund=1000.
+/// Also verifies that `project`, `reserve`, and `comission` are fully decremented
+/// for this single-investor scenario.
+#[test]
+fn test_refund_investor() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let u: Address = Address::generate(&e);
+    test_data.token_admin.mint(&u, &1000);
+    let inv = test_data.client.invest(&u, &1000);
+
+    assert_contract_balance(&test_data, 945, 50, 5, 0, 995, 0);
+
+    e.ledger().set_timestamp(3 * 86400);
+
+    let balance_before = test_data.token.balance(&u);
+    let refunded = test_data.client.refund_investor(&inv.token_id);
+    let balance_after = test_data.token.balance(&u);
+
+    assert_eq!(refunded, 1000_i128);
+    assert_eq!(balance_after - balance_before, 1000_i128);
+
+    let contract_bal = test_data.client.get_contract_balance();
+    assert_eq!(contract_bal.project, 0_i128);
+    assert_eq!(contract_bal.reserve, 0_i128);
+    assert_eq!(contract_bal.comission, 0_i128);
+    assert_eq!(contract_bal.refunded_to_investor, 1000_i128);
+}
+
+/// Verifies that `withdrawn_commissions` transfers the full accumulated commission
+/// to the owner, returns the correct amount, and updates `comission_withdrawal`.
+/// Investing 1000 tokens generates 5 in commission; after fundraising ends the
+/// owner should receive exactly 5 tokens.
+#[test]
+fn test_withdrawn_commissions() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let u: Address = Address::generate(&e);
+    test_data.token_admin.mint(&u, &1000);
+    test_data.client.invest(&u, &1000);
+
+    assert_contract_balance(&test_data, 945, 50, 5, 0, 995, 0);
+
+    e.ledger().set_timestamp(8 * 86400);
+
+    let owner_balance_before = test_data.token.balance(&test_data.admin);
+    let withdrawn = test_data.client.withdrawn_commissions();
+    let owner_balance_after = test_data.token.balance(&test_data.admin);
+
+    assert_eq!(withdrawn, 5_i128);
+    assert_eq!(owner_balance_after - owner_balance_before, 5_i128);
+
+    let contract_bal = test_data.client.get_contract_balance();
+    assert_eq!(contract_bal.comission_withdrawal, 5_i128);
+}
+
+/// Verifies that owner-gated functions (`pause`, `unpause`) request exactly one
+/// authorization from the admin address.
+/// The test inspects `e.auths()` after each call.
 #[test]
 fn test_owner_authorization_verification() {
     let e = Env::default();
@@ -495,4 +559,112 @@ fn test_owner_authorization_verification() {
     let auths = e.auths();
     assert_eq!(auths.len(), 1, "Should request exactly one authorization");
     assert_eq!(auths[0].0, test_data.admin, "Authorization should be from admin/owner");
+}
+
+
+/// Verifies that a single investor receives the full reserve balance when
+/// they are the only active investment. With 1 investor holding 100% of
+/// `payment_obligations`, the proportional calculation yields the entire reserve.
+/// After the call the investment is marked completed, `reserve` reaches 0,
+/// and `payment_obligations` is decremented by `remaining_obligations`.
+#[test]
+fn test_emergency_pay_investor_single_investor() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let u: Address = Address::generate(&e);
+    test_data.token_admin.mint(&u, &1000);
+    let inv = test_data.client.invest(&u, &1000);
+
+    e.ledger().set_timestamp(8 * 86400);
+
+    let balance_before = test_data.token.balance(&u);
+    let paid = test_data.client.emergency_pay_investor(&inv.token_id);
+    let balance_after = test_data.token.balance(&u);
+
+    assert_eq!(paid, 50_i128);
+    assert_eq!(balance_after - balance_before, 50_i128);
+
+    let b = test_data.client.get_contract_balance();
+    assert_eq!(b.reserve, 0_i128);
+    assert_eq!(b.payment_obligations, 0_i128);
+    assert_eq!(b.payments, 50_i128);
+}
+
+/// Verifies that three investors with different investment amounts each receive
+/// a proportional share of the reserve according to their remaining obligations.
+/// The reserve must be fully distributed (sum of all payments == initial reserve),
+/// allowing a small integer-truncation remainder (dust).
+#[test]
+fn test_emergency_pay_investor_multiple_investors_proportional() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let user2 = Address::generate(&e);
+    let user3 = Address::generate(&e);
+
+    test_data.token_admin.mint(&test_data.user, &2000);
+    test_data.token_admin.mint(&user2, &2000);
+    test_data.token_admin.mint(&user3, &1000);
+
+    let inv1 = test_data.client.invest(&test_data.user, &2000);
+    let inv2 = test_data.client.invest(&user2, &2000);
+    let inv3 = test_data.client.invest(&user3, &1000);
+
+    e.ledger().set_timestamp(8 * 86400);
+
+    let reserve_before = test_data.client.get_contract_balance().reserve;
+
+    let b1_before = test_data.token.balance(&test_data.user);
+    let paid1 = test_data.client.emergency_pay_investor(&inv1.token_id);
+    let b1_after = test_data.token.balance(&test_data.user);
+    assert_eq!(b1_after - b1_before, paid1);
+
+    let b2_before = test_data.token.balance(&user2);
+    let paid2 = test_data.client.emergency_pay_investor(&inv2.token_id);
+    let b2_after = test_data.token.balance(&user2);
+    assert_eq!(b2_after - b2_before, paid2);
+
+    let b3_before = test_data.token.balance(&user3);
+    let paid3 = test_data.client.emergency_pay_investor(&inv3.token_id);
+    let b3_after = test_data.token.balance(&user3);
+    assert_eq!(b3_after - b3_before, paid3);
+
+    assert_eq!(paid1, paid2);
+    assert_eq!(paid3, paid1 / 2);
+
+    assert!((paid1 + paid2 + paid3 - reserve_before).abs() <= 2);
+
+    let b = test_data.client.get_contract_balance();
+    assert!(b.reserve <= 2);
+    assert_eq!(b.payment_obligations, 0_i128);
+}
+
+/// Verifies that `emergency_pay_investor` requests authorization from both
+/// the owner (`admin`) and `project_address`.
+/// The test confirms both addresses appear in the collected authorizations.
+#[test]
+fn test_emergency_pay_investor_authorization() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let u: Address = Address::generate(&e);
+    test_data.token_admin.mint(&u, &1000);
+    let inv = test_data.client.invest(&u, &1000);
+
+    e.ledger().set_timestamp(8 * 86400);
+    test_data.client.emergency_pay_investor(&inv.token_id);
+
+    let auths = e.auths();
+    let admin_auth = auths.iter().find(|(addr, _)| *addr == test_data.admin);
+    let project_auth = auths.iter().find(|(addr, _)| *addr == test_data.project_address);
+
+    assert!(admin_auth.is_some(), "Owner auth must be requested");
+    assert!(project_auth.is_some(), "project_address auth must be requested");
 }
