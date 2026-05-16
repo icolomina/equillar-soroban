@@ -1,445 +1,520 @@
-use soroban_sdk::token::TokenClient;
-use soroban_sdk::{contract, contractimpl, token, Address, Env, Map, String};
-use stellar_access::ownable::{self as ownable};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol};
 use stellar_contract_utils::pausable::{self as pausable, Pausable};
-use stellar_macros::{only_owner, when_not_paused};
-use stellar_tokens::non_fungible::{Base, NonFungibleToken};
+use stellar_macros::{has_role, only_admin, only_role, when_not_paused};
+use stellar_tokens::non_fungible::Base;
+use stellar_access::access_control::{self as access_control};
 
-use crate::amounts::{Amount};
-use crate::balance::ContractBalance;
-use crate::claim::{calculate_claimable_payments, Claim};
-use crate::data::{ContractData, FromNumber, InvestmentContractParams, State};
-use crate::investment::{Investment, InvestmentReturnType};
+use crate::collateral::{self, Collateral};
+use crate::emergency;
+use crate::interface::InvestmentContractInterface;
+use crate::investment::{self, Investment, InvestmentReturnType};
+use crate::payments;
+use crate::shared::{self, ContractBalance, InvestmentContractParams};
+use crate::treasury;
 use crate::validation::{self, Error};
-
-use crate::{require, storage as Storage};
-
-fn get_token<'a>(env: &'a Env, contract_data: &ContractData) -> TokenClient<'a> {
-    token::Client::new(env, &contract_data.token)
-}
 
 #[contract]
 pub struct InvestmentContract;
 
+/// Returns the current top-level admin configured in access-control storage.
+///
+/// This helper is intentionally strict and panics if admin was not initialized,
+/// because all sensitive flows depend on constructor initialization.
+fn admin(env: &Env) -> Address {
+    access_control::get_admin(&env).unwrap()
+}
+
+/// Requires authentication for callers that are either:
+/// - the contract admin, or
+/// - holders of at least one configured role.
+///
+/// This is used by read-oriented endpoints where access should be broader than
+/// `only_admin` but still restricted to known actors.
+///
+/// # Panics
+/// Panics when `caller` is neither admin nor role holder.
+fn require_admin_or_any_role(env: &Env, caller: &Address) {
+    let is_admin = *caller == admin(&env);
+
+    if is_admin  {
+        caller.require_auth();
+        return;
+    }
+
+    for role in access_control::get_existing_roles(&env) {
+        if access_control::has_role(env, caller, &role).is_some() {
+            caller.require_auth();
+            return;
+        }
+    }
+
+    panic!("Caller is not admin or any role");
+}
+
+
+
+// Public Soroban entrypoints exported by the contract.
 #[contractimpl]
 impl InvestmentContract {
-    /// Initializes the investment contract with configuration parameters.
+    /// Initializes contract configuration and metadata.
     ///
-    /// Sets up the contract with admin authentication, token configuration, investment rules,
-    /// and return structure. The contract starts in 'Active' state.
-    ///
-    /// # Parameters
-    ///
-    /// * `env` - The execution environment provided by Soroban.
-    /// * `admin_addr` - The contract administrator's address (requires authentication).
-    /// * `project_address` - The address that will receive withdrawn project funds.
-    /// * `token_addr` - The token contract address used for all transactions.
-    /// * `i_rate` - The interest rate percentage (must be > 0).
-    /// * `claim_block_days` - Days investors must wait before claiming returns.
-    /// * `goal` - The total funding goal (must be > 0).
-    /// * `return_type` - The return model: 1=ReverseLoan, 2=Coupon.
-    /// * `return_months` - Number of months for return payments (must be > 0).
-    /// * `min_per_investment` - Minimum investment amount (must be > 0).
+    /// # Access Control
+    /// Requires auth from `admin_addr`.
     ///
     /// # Errors
-    ///
-    /// * `InterestRateMustBeGreaterThanZero` if i_rate is 0.
-    /// * `GoalMustBeGreaterThanZero` if goal is 0.
-    /// * `ReturnMonthsMustBeGreaterThanZero` if return_months is 0.
-    /// * `MinPerInvestmentMustBeGreaterThanZero` if min_per_investment is 0.
-    /// * `UnsupportedReturnType` if return_type is not 1 or 2.
+    /// Returns validation errors for constructor params and unsupported return type.
     pub fn __constructor(
         env: Env,
-        owner_addr: Address,
-        project_address: Address,
+        admin_addr: Address,
         token_addr: Address,
+        price_oracle: Address,
         uri: String,
         name: String,
         symbol: String,
         investment_params: InvestmentContractParams,
     ) -> Result<(), Error> {
-        owner_addr.require_auth();
+        admin_addr.require_auth();
         validation::validate_constructor_params(
             investment_params.i_rate,
             investment_params.goal,
             investment_params.return_months,
             investment_params.min_per_investment,
         )?;
-        InvestmentReturnType::from_number(investment_params.return_type).ok_or(Error::UnsupportedReturnType)?;
+        InvestmentReturnType::from_number(investment_params.return_type)
+            .ok_or(Error::UnsupportedReturnType)?;
 
-        // Set the owner using OpenZeppelin Ownable
-        ownable::set_owner(&env, &owner_addr);
-        let contract_data = ContractData::from_investment_contract_params(
+        access_control::set_admin(&env, &admin_addr);
+
+        let contract_data = shared::ContractData::from_investment_contract_params(
+            &env,
             &investment_params,
             token_addr,
-            project_address,
+            price_oracle,
         );
 
-        Base::set_metadata(&env, uri, name, symbol);
-        Storage::update_contract_data(&env, &contract_data);
+        Base::set_metadata(&env, uri, name, symbol.clone());
+        shared::storage::update_contract_data(&env, &contract_data);
+        shared::events::emit_contract_deployed_event(
+            &env,
+            env.current_contract_address(),
+            symbol,
+            contract_data.ts_fundraising_ends,
+            contract_data.ts_payments_start,
+        );
+
         Ok(())
     }
 
-    /// Processes a scheduled payment to an investor (admin only).
+    /// Creates an investment position for `addr` and mints its NFT receipt.
     ///
-    /// Transfers the regular payment amount from the contract's reserve balance to the investor.
-    /// Updates investment status, payment tracking, and claim schedules. Validates timing constraints
-    /// to ensure payments are made according to the investment schedule.
-    ///
-    /// # Parameters
-    ///
-    /// * `env` - The execution environment.
-    /// * `addr` - The investor's address receiving the payment.
-    /// * `ts` - The claimable timestamp identifying the specific investment.
-    ///
-    /// # Returns
-    ///
-    /// * The updated `Investment` object with incremented payment counters.
+    /// # Access Control
+    /// - Contract must not be paused.
+    /// - `addr` must hold the `operator` role and authenticate.
     ///
     /// # Errors
-    ///
-    /// * `AddressHasNotInvested` if no investment exists for this address and timestamp.
-    /// * `AddressInvestmentIsNotClaimableYet` if the claimable date hasn't been reached.
-    /// * `AddressInvestmentIsFinished` if all payments have been completed.
-    /// * `AddressInvestmentNextTransferNotClaimableYet` if less than a month has passed since last payment.
-    /// * `ContractInsufficientBalance` if reserve balance is insufficient.
-    /// * `RecipientCannotReceivePayment` or `InvalidPaymentData` if token transfer fails.
-    #[only_owner]
+    /// Propagates investment validation and transfer errors.
     #[when_not_paused]
-    pub fn process_investor_payment(env: Env, token_id: u32) -> Result<Investment, Error> {
-        let contract_data = Storage::get_contract_data(&env);
-        let addr = Self::owner_of(&env, token_id);
-        let mut investment =Storage::get_investment(&env, token_id).ok_or(Error::AddressHasNotInvested)?;
-
-        validation::validate_investment_payment(&env, &investment)?;
-
-        let mut contract_balances: ContractBalance = Storage::get_balances_or_new(&env);
-        let tk = get_token(&env, &contract_data);
-        let amount_to_transfer: i128 = investment.process_investment_payment(&env, &contract_data);
-
-        validation::validate_reserve_balance(amount_to_transfer, &contract_balances)?;
-        tk.try_transfer(&env.current_contract_address(), &addr, &amount_to_transfer)
-            .map_err(|_| Error::RecipientCannotReceivePayment)?
-            .map_err(|_| Error::InvalidPaymentData)?;
-
-        Storage::update_investment_with_claim(&env, token_id, &investment);
-        contract_balances.recalculate_from_payment_to_investor(&amount_to_transfer);
-        Storage::update_contract_balances(&env, &contract_balances);
-
-        contract_balances.emit_event(&env);
-        Ok(investment)
-    }
-
-    //pub fn claim(end: Env, addr: Address)
-
-    /// Allows an investor to make a new investment.
-    ///
-    /// Validates the investment amount, contract state, and funding goal constraints.
-    /// Transfers tokens from the investor to the contract, splits them into project and reserve balances,
-    /// creates the investment record with calculated returns, and updates the contract state.
-    /// If the funding goal is reached, changes contract state to 'FundsReached'.
-    ///
-    /// # Parameters
-    ///
-    /// * `env` - The execution environment.
-    /// * `addr` - The investor's address (requires authentication).
-    /// * `amount` - The investment amount in tokens.
-    ///
-    /// # Returns
-    ///
-    /// * The created `Investment` object with all calculated fields.
-    ///
-    /// # Errors
-    ///
-    /// * `AmountLessThanMinimum` if amount is below the minimum per investment.
-    /// * `GoalAlreadyReached` if the funding goal has already been reached.
-    /// * `AddressInsufficientBalance` if investor doesn't have enough tokens.
-    /// * `WouldExceedGoal` if this investment would exceed the funding goal.
-    ///
-    /// # Note
-    ///
-    /// * The `#[when_not_paused]` macro automatically rejects calls if the contract is paused.
-    #[when_not_paused]
+    #[only_role(addr, "operator")]
     pub fn invest(env: Env, addr: Address, amount: i128) -> Result<Investment, Error> {
-        addr.require_auth();
-        let mut contract_data: ContractData = Storage::get_contract_data(&env);
-        let tk = get_token(&env, &contract_data);
-
-        validation::validate_investment(amount, &contract_data, tk.balance(&addr))?;
-        let amounts: Amount = Amount::from_investment(&env, &amount, &contract_data.interest_rate, tk.decimals());
-
-        // Validate goal before transfer
-        let mut contract_balance = Storage::get_balances_or_new(&env);
-        validation::validate_investment_goal(
-            contract_balance.received_so_far,
-            amounts.get_invested_amount(),
-            contract_data.goal,
-        )?;
-
-        tk.try_transfer(&addr, env.current_contract_address(), &amount)
-            .map_err(|_| Error::RecipientCannotReceivePayment)?
-            .map_err(|_| Error::InvalidPaymentData)?;
-
-        contract_balance.recalculate_from_investment(&amounts);
-        Storage::update_contract_balances(&env, &contract_balance);
-
-        let token_id = Base::sequential_mint(&env, &addr);
-        let addr_investment = Investment::new(&env, &contract_data, &amounts, token_id);
-        Storage::update_investment_with_claim(&env, token_id, &addr_investment);
-
-        if contract_balance.received_so_far >= contract_data.goal {
-            contract_data.state = State::FundsReached;
-            Storage::update_contract_data(&env, &contract_data);
-            contract_data.state.emit_event(&env);
-        }
-
-        contract_balance.emit_event(&env);
-
-        Ok(addr_investment)
+        investment::invest(&env, &addr, amount)
     }
 
-    /// Retrieves the current contract balances (admin only).
+    /// Processes one scheduled payment for the investment identified by `token_id`.
     ///
-    /// Returns the breakdown of contract funds across different balance categories:
-    /// project balance, reserve balance, commission, and total received.
-    ///
-    /// # Parameters
-    ///
-    /// * `env` - The execution environment.
-    ///
-    /// # Returns
-    ///
-    /// * `ContractBalances` containing all balance information.
-    #[only_owner]
-    pub fn get_contract_balance(env: Env) -> Result<ContractBalance, Error> {
-        let contract_balances: ContractBalance = Storage::get_balances_or_new(&env);
-
-        Ok(contract_balances)
-    }
-
-    /// Withdraws funds from the project balance to the project address (admin only).
-    ///
-    /// Transfers the specified amount from the contract's project balance to the configured
-    /// project address. Validates sufficient balance and updates internal accounting.
-    ///
-    /// # Parameters
-    ///
-    /// * `env` - The execution environment.
-    /// * `amount` - The amount to withdraw from project balance.
-    ///
-    /// # Returns
-    ///
-    /// * `true` on success.
-    ///
-    /// # Errors
-    ///
-    /// * `ContractInsufficientBalance` if project balance is less than the requested amount.
-    /// * `RecipientCannotReceivePayment` or `InvalidPaymentData` if the transfer fails.
-    #[only_owner]
+    /// # Access Control
+    /// - Contract must not be paused.
+    /// - Admin only.
     #[when_not_paused]
-    pub fn single_withdrawn(env: Env, amount: i128) -> Result<bool, Error> {
-        let contract_data = Storage::get_contract_data(&env);
+    #[only_admin]
+    pub fn process_investor_payment(env: Env, token_id: u32) -> Result<Investment, Error> {
+        payments::process_investor_payment(&env, token_id)
+    }
 
-        let mut contract_balances: ContractBalance = Storage::get_balances_or_new(&env);
-        validation::validate_withdrawal(amount, contract_balances.project)?;
+    /// Refunds an investor during the refund window and closes that position.
+    ///
+    /// # Access Control
+    /// Admin only.
+    #[only_admin]
+    pub fn refund_investor(env: Env, token_id: u32) -> Result<i128, Error> {
+        investment::refund_investor(&env, token_id)
+    }
 
-        let tk = get_token(&env, &contract_data);
+    /// Returns the current accounting snapshot of contract balances.
+    ///
+    /// # Access Control
+    /// `caller` must authenticate and be either admin or any existing role holder.
+    pub fn get_contract_balance(env: Env, caller: Address) -> Result<ContractBalance, Error> {
+        require_admin_or_any_role(&env, &caller);
+        Ok(shared::storage::get_balances_or_new(&env))
+    }
 
-        // Verify the transfer can be completed
-        tk.try_transfer(
-            &env.current_contract_address(),
-            &contract_data.project_address,
-            &amount,
+    /// Grants `operator` role to an address.
+    ///
+    /// Operators are allowed to call investment entrypoints.
+    ///
+    /// # Access Control
+    /// Admin only.
+    #[only_admin]
+    pub fn grant_operator(env: Env, operator: Address) -> Result<(), Error> {
+        let operator_role = Symbol::new(&env, "operator");
+        access_control::grant_role_no_auth(&env, &operator, &operator_role, &admin(&env));
+        Ok(())
+    }
+
+    /// Revokes `operator` role from an address.
+    ///
+    /// # Access Control
+    /// - Admin only.
+    /// - `operator` must currently hold `operator` role.
+    #[only_admin]
+    #[has_role(operator, "operator")]
+    pub fn revoke_operator(env: Env, operator: Address) -> Result<(), Error> {
+        let operator_role = Symbol::new(&env, "operator");
+        access_control::revoke_role_no_auth(&env, &operator, &operator_role, &admin(&env));
+        Ok(())
+    }
+
+    /// Grants `company` role to an address.
+    ///
+    /// Company role gates treasury and collateral source addresses.
+    ///
+    /// # Access Control
+    /// Admin only.
+    #[only_admin]
+    pub fn grant_company(env: Env, company: Address) -> Result<(), Error> {
+        let company_role = Symbol::new(&env, "company");
+        access_control::grant_role_no_auth(&env, &company, &company_role, &admin(&env));
+        Ok(())
+    }
+
+    /// Revokes `company` role from an address.
+    ///
+    /// # Access Control
+    /// - Admin only.
+    /// - `company` must currently hold `company` role.
+    #[only_admin]
+    #[has_role(company, "company")]
+    pub fn revoke_company(env: Env, company: Address) -> Result<(), Error> {
+        let company_role = Symbol::new(&env, "company");
+        access_control::revoke_role_no_auth(&env, &company, &company_role, &admin(&env));
+        Ok(())
+    }
+
+    /// Grants `manager` role to an address.
+    ///
+    /// Manager role gates commission recipients.
+    ///
+    /// # Access Control
+    /// Admin only.
+    #[only_admin]
+    pub fn grant_manager(env: Env, manager: Address) -> Result<(), Error> {
+        let manager_role = Symbol::new(&env, "manager");
+        access_control::grant_role_no_auth(&env, &manager, &manager_role, &admin(&env));
+        Ok(())
+    }
+
+    /// Revokes `manager` role from an address.
+    ///
+    /// # Access Control
+    /// - Admin only.
+    /// - `manager` must currently hold `manager` role.
+    #[only_admin]
+    #[has_role(manager, "manager")]
+    pub fn revoke_manager(env: Env, manager: Address) -> Result<(), Error> {
+        let manager_role = Symbol::new(&env, "manager");
+        access_control::revoke_role_no_auth(&env, &manager, &manager_role, &admin(&env));
+        Ok(())
+    }
+
+    /// Initiates the two-step admin transfer process.
+    ///
+    /// The pending transfer is configured with a one-day acceptance window.
+    ///
+    /// # Access Control
+    /// Admin only.
+    #[only_admin]
+    pub fn transfer_admin_role(env: Env, new_admin: Address) -> Result<(), Error> {
+        let live_until_ledger = env.ledger().sequence() + 17_280_u32; // 1 day in ledgers (assuming 5s ledger close time)
+        access_control::transfer_admin_role(&env, &new_admin, live_until_ledger);
+        Ok(())
+    }
+
+    /// Accepts an existing pending admin transfer.
+    ///
+    /// # Access Control
+    /// Admin-gated endpoint in this contract facade.
+    #[only_admin]
+    pub fn accept_admin_transfer_role(env: Env) -> Result<(), Error> {
+        access_control::accept_admin_transfer(&env);
+        Ok(())
+    }
+
+    /// Withdraws project funds to `to`.
+    ///
+    /// # Access Control
+    /// - Contract must not be paused.
+    /// - Admin only.
+    /// - `to` must hold `company` role.
+    #[when_not_paused]
+    #[only_admin]
+    #[has_role(to, "company")]
+    pub fn withdrawn(env: Env, amount: i128, to: Address) -> Result<(), Error> {
+        treasury::withdrawn(&env, amount, to)
+    }
+
+    /// Withdraws accumulated commissions to `to`.
+    ///
+    /// # Access Control
+    /// - Contract must not be paused.
+    /// - Admin only.
+    /// - `to` must hold `manager` role.
+    #[when_not_paused]
+    #[only_admin]
+    #[has_role(to, "manager")]
+    pub fn withdrawn_commissions(env: Env, to: Address) -> Result<i128, Error> {
+        treasury::withdrawn_commissions(&env, to)
+    }
+
+    /// Registers an inbound transfer from a company address for next payment round.
+    ///
+    /// # Access Control
+    /// - Contract must not be paused.
+    /// - Admin only.
+    /// - `from` must hold `company` role.
+    #[when_not_paused]
+    #[only_admin]
+    #[has_role(from, "company")]
+    pub fn add_company_transfer(env: Env, amount: i128, from: Address) -> Result<bool, Error> {
+        treasury::add_company_transfer(&env, from, amount)
+    }
+
+    /// Freezes contract into emergency mode and snapshots distributable pool.
+    ///
+    /// # Access Control
+    /// - Contract must not be paused.
+    /// - Admin only.
+    #[only_admin]
+    #[when_not_paused]
+    pub fn activate_emergency_close(env: Env) -> Result<bool, Error> {
+        emergency::activate_emergency_close(&env)
+    }
+
+    /// Pays one investor from emergency pool according to emergency rules.
+    ///
+    /// # Access Control
+    /// - Contract must not be paused.
+    /// - Admin only.
+    #[only_admin]
+    #[when_not_paused]
+    pub fn emergency_pay_investor(env: Env, token_id: u32) -> Result<i128, Error> {
+        emergency::emergency_pay_investor(&env, token_id)
+    }
+
+    /// Deposits collateral token amount and recalculates collateral state.
+    ///
+    /// # Access Control
+    /// - Contract must not be paused.
+    /// - Admin only.
+    /// - `collateral_addr` must hold `company` role.
+    #[only_admin]
+    #[when_not_paused]
+    #[has_role(collateral_addr, "company")]
+    pub fn add_collateral(
+        env: Env,
+        collateral_token_addr: Address,
+        collateral_token_amount: i128,
+        collateral_token_symbol: String,
+        collateral_addr: Address,
+    ) -> Result<Collateral, Error> {
+        collateral::add_collateral(
+            &env,
+            collateral_token_addr,
+            collateral_token_amount,
+            collateral_token_symbol,
+            collateral_addr,
         )
-        .map_err(|_| Error::RecipientCannotReceivePayment)?
-        .map_err(|_| Error::InvalidPaymentData)?;
-
-        //decrement_project_balance_from_company_withdrawal(&mut contract_balances, &amount);
-        contract_balances.recalculate_from_company_withdrawal(&amount);
-        Storage::update_contract_balances(&env, &contract_balances);
-        contract_balances.emit_event(&env);
-
-        Ok(true)
     }
 
-    /// Calculates additional funds needed in reserve balance (admin only).
+    /// Settles an investment using available collateral.
     ///
-    /// Analyzes upcoming payment claims (within the next week) and compares them against
-    /// the current reserve balance to determine if additional funds are needed.
-    ///
-    /// # Parameters
-    ///
-    /// * `env` - The execution environment.
-    ///
-    /// # Returns
-    ///
-    /// * The additional amount needed in reserve, or 0 if reserve is sufficient.
-    #[only_owner]
-    pub fn check_reserve_balance(env: Env) -> Result<i128, Error> {
-        let claims_map: Map<u32, Claim> = Storage::get_claims_map_or_new(&env);
-        let project_balances: ContractBalance = Storage::get_balances_or_new(&env);
-        let mut min_funds: i128 = 0;
-
-        for (_, next_claim) in claims_map.iter() {
-            if next_claim.is_claim_next(&env) {
-                min_funds += next_claim.amount_to_pay;
-            }
-        }
-
-        if min_funds > 0 && project_balances.reserve < min_funds {
-            let diff_to_contribute: i128 = min_funds - project_balances.reserve;
-            return Ok(diff_to_contribute);
-        }
-
-        Ok(0_i128)
-    }
-
-    /// Adds funds from admin to the contract's reserve balance (admin only).
-    ///
-    /// Transfers tokens from the admin address to the contract and adds them to the reserve balance.
-    /// This is used to replenish the reserve fund for upcoming investor payments.
-    ///
-    /// # Parameters
-    ///
-    /// * `env` - The execution environment.
-    /// * `amount` - The amount to transfer to reserve.
-    ///
-    /// # Returns
-    ///
-    /// * `true` on success.
-    ///
-    /// # Errors
-    ///
-    /// * `AddressInsufficientBalance` if admin doesn't have enough tokens.
-    #[only_owner]
-    pub fn add_company_transfer(env: Env, amount: i128) -> Result<bool, Error> {
-        let contract_data = Storage::get_contract_data(&env);
-        let owner = ownable::get_owner(&env).unwrap();
-
-        let tk = get_token(&env, &contract_data);
-        validation::validate_company_transfer(&tk, &owner, amount)?;
-        tk.try_transfer(&owner, env.current_contract_address(), &amount)
-            .map_err(|_| Error::RecipientCannotReceivePayment)?
-            .map_err(|_| Error::InvalidPaymentData)?;
-
-        let mut contract_balances = Storage::get_balances_or_new(&env);
-        contract_balances.recalculate_from_company_contribution(&amount);
-        Storage::update_contract_balances(&env, &contract_balances);
-        contract_balances.emit_event(&env);
-
-        Ok(true)
-    }
-
-    /// Moves funds from project balance to reserve balance (admin only).
-    ///
-    /// Transfers the specified amount internally from the project balance to the reserve balance.
-    /// This is used to ensure sufficient reserve funds for upcoming investor payments.
-    ///
-    /// # Parameters
-    ///
-    /// * `env` - The execution environment.
-    /// * `amount` - The amount to move from project to reserve.
-    ///
-    /// # Returns
-    ///
-    /// * `true` on success.
-    ///
-    /// # Errors
-    ///
-    /// * `ProjectBalanceInsufficientAmount` if project balance is less than the requested amount.
-    #[only_owner]
-    pub fn move_funds_to_the_reserve(env: Env, amount: i128) -> Result<bool, Error> {
-        let mut contract_balances = Storage::get_balances_or_new(&env);
-        validation::validate_move_to_reserve(amount, contract_balances.project)?;
-
-        contract_balances.recalculate_from_project_to_reserver_movement(&amount);
-        Storage::update_contract_balances(&env, &contract_balances);
-        contract_balances.emit_event(&env);
-
-        Ok(true)
-    }
-
-    /// Allows an investor to claim all their pending payment periods at once.
-    ///
-    /// Unlike `process_investor_payment` (admin-only, single payment), this function is
-    /// called by the investor themselves. It calculates how many monthly payments have
-    /// become available since the last claim (or since the claimable date for first-time
-    /// claims) and transfers the accumulated amount in a single operation.
-    ///
-    /// For example, if an investor hasn't claimed for 3 months, they receive 3 × regular_payment.
-    ///
-    /// # Parameters
-    ///
-    /// * `env` - The execution environment.
-    /// * `addr` - The investor's address (requires authentication).
-    /// * `ts` - The claimable timestamp identifying the specific investment.
-    ///
-    /// # Returns
-    ///
-    /// * The updated `Investment` object with incremented payment counters.
-    ///
-    /// # Errors
-    ///
-    /// * `AddressHasNotInvested` if no investment exists for this address and timestamp.
-    /// * `AddressInvestmentIsNotClaimableYet` if the claimable date hasn't been reached.
-    /// * `AddressInvestmentIsFinished` if all payments have been completed.
-    /// * `AddressInvestmentNextTransferNotClaimableYet` if no full payment periods have elapsed.
-    /// * `ContractInsufficientBalance` if reserve balance is insufficient.
-    /// * `RecipientCannotReceivePayment` or `InvalidPaymentData` if token transfer fails.
+    /// # Access Control
+    /// - Contract must not be paused.
+    /// - Admin only.
     #[when_not_paused]
-    pub fn claim(env: Env, token_id: u32) -> Result<Investment, Error> {
-        let addr: Address = Self::owner_of(&env, token_id);
-        addr.require_auth();
+    #[only_admin]
+    pub fn pay_with_collateral(env: Env, token_id: u32) -> Result<i128, Error> {
+        collateral::pay_with_collateral(&env, token_id)
+    }
 
-        let contract_data = Storage::get_contract_data(&env);
-        let mut investment =Storage::get_investment(&env, token_id).ok_or(Error::AddressHasNotInvested)?;
+    /// Returns remaining collateral balance to configured collateral provider.
+    ///
+    /// # Access Control
+    /// - Contract must not be paused.
+    /// - Admin only.
+    #[when_not_paused]
+    #[only_admin]
+    pub fn return_collateral_to_company(env: Env) -> Result<i128, Error> {
+        collateral::return_collateral_to_company(&env)
+    }
 
-        validation::validate_claim(&env, &investment)?;
-
-        let num_payments =calculate_claimable_payments(&env, &investment, contract_data.return_months);
-        require!(
-            num_payments > 0,
-            Error::AddressInvestmentNextTransferNotClaimableYet
-        );
-
-        let mut contract_balances = Storage::get_balances_or_new(&env);
-        let amount_to_transfer = investment.process_multiple_payments(&env, &contract_data, num_payments);
-
-        validation::validate_reserve_balance(amount_to_transfer, &contract_balances)?;
-
-        let tk = get_token(&env, &contract_data);
-        tk.try_transfer(&env.current_contract_address(), &addr, &amount_to_transfer)
-            .map_err(|_| Error::RecipientCannotReceivePayment)?
-            .map_err(|_| Error::InvalidPaymentData)?;
-
-        Storage::update_investment_with_claim(&env, token_id, &investment);
-        contract_balances.recalculate_from_payment_to_investor(&amount_to_transfer);
-        Storage::update_contract_balances(&env, &contract_balances);
-
-        contract_balances.emit_event(&env);
-        Ok(investment)
+    /// Returns whether the contract is paused.
+    ///
+    /// # Access Control
+    /// Caller must be admin or any role holder and must authenticate.
+    pub fn paused(env: &Env, caller: Address) -> bool {
+        require_admin_or_any_role(env, &caller);
+        pausable::paused(env)
     }
 }
 
-#[contractimpl(contracttrait)]
-impl NonFungibleToken for InvestmentContract {
-    type ContractType = Base;
-}
-
+// Pausable extension entrypoints exposed by the contract.
 #[contractimpl]
 impl Pausable for InvestmentContract {
-    #[only_owner]
-    fn paused(e: &Env) -> bool {
-        pausable::paused(e)
+
+    /// Pauses guarded operations.
+    ///
+    /// # Access Control
+    /// Admin only.
+    #[only_admin]
+    fn pause(env: &Env, _caller: Address) {
+        pausable::pause(env);
     }
 
-    #[only_owner]
-    fn pause(e: &Env, _caller: Address) {
-        pausable::pause(e);
+    /// Unpauses guarded operations.
+    ///
+    /// # Access Control
+    /// Admin only.
+    #[only_admin]
+    fn unpause(env: &Env, _caller: Address) {
+        pausable::unpause(env);
+    }
+}
+
+// Rust-side interface conformance for the public contract API.
+impl InvestmentContractInterface for InvestmentContract {
+    fn __constructor(
+        env: Env,
+        owner_addr: Address,
+        token_addr: Address,
+        price_oracle: Address,
+        uri: String,
+        name: String,
+        symbol: String,
+        investment_params: InvestmentContractParams,
+    ) -> Result<(), Error> {
+        InvestmentContract::__constructor(
+            env,
+            owner_addr,
+            token_addr,
+            price_oracle,
+            uri,
+            name,
+            symbol,
+            investment_params,
+        )
     }
 
-    #[only_owner]
-    fn unpause(e: &Env, _caller: Address) {
-        pausable::unpause(e);
+    fn invest(env: Env, addr: Address, amount: i128) -> Result<Investment, Error> {
+        InvestmentContract::invest(env, addr, amount)
+    }
+
+    fn process_investor_payment(env: Env, token_id: u32) -> Result<Investment, Error> {
+        InvestmentContract::process_investor_payment(env, token_id)
+    }
+
+    fn refund_investor(env: Env, token_id: u32) -> Result<i128, Error> {
+        InvestmentContract::refund_investor(env, token_id)
+    }
+
+    fn get_contract_balance(env: Env, caller: Address) -> Result<ContractBalance, Error> {
+        InvestmentContract::get_contract_balance(env, caller)
+    }
+
+    fn grant_operator(env: Env, operator: Address) -> Result<(), Error> {
+        InvestmentContract::grant_operator(env, operator)
+    }
+
+    fn revoke_operator(env: Env, operator: Address) -> Result<(), Error> {
+        InvestmentContract::revoke_operator(env, operator)
+    }
+
+    fn grant_company(env: Env, company: Address) -> Result<(), Error> {
+        InvestmentContract::grant_company(env, company)
+    }
+
+    fn revoke_company(env: Env, company: Address) -> Result<(), Error> {
+        InvestmentContract::revoke_company(env, company)
+    }
+
+    fn grant_manager(env: Env, manager: Address) -> Result<(), Error> {
+        InvestmentContract::grant_manager(env, manager)
+    }
+
+    fn revoke_manager(env: Env, manager: Address) -> Result<(), Error> {
+        InvestmentContract::revoke_manager(env, manager)
+    }
+
+    fn transfer_admin_role(env: Env, new_admin: Address) -> Result<(), Error> {
+        InvestmentContract::transfer_admin_role(env, new_admin)
+    }
+
+    fn accept_admin_transfer_role(env: Env) -> Result<(), Error> {
+        InvestmentContract::accept_admin_transfer_role(env)
+    }
+
+    fn withdrawn(env: Env, amount: i128, to: Address) -> Result<(), Error> {
+        InvestmentContract::withdrawn(env, amount, to)
+    }
+
+    fn withdrawn_commissions(env: Env, to: Address) -> Result<i128, Error> {
+        InvestmentContract::withdrawn_commissions(env, to)
+    }
+
+    fn add_company_transfer(env: Env, amount: i128, from: Address) -> Result<bool, Error> {
+        InvestmentContract::add_company_transfer(env, amount, from)
+    }
+
+    fn activate_emergency_close(env: Env) -> Result<bool, Error> {
+        InvestmentContract::activate_emergency_close(env)
+    }
+
+    fn emergency_pay_investor(env: Env, token_id: u32) -> Result<i128, Error> {
+        InvestmentContract::emergency_pay_investor(env, token_id)
+    }
+
+    fn add_collateral(
+        env: Env,
+        collateral_token_addr: Address,
+        collateral_token_amount: i128,
+        collateral_token_symbol: String,
+        collateral_addr: Address,
+    ) -> Result<Collateral, Error> {
+        InvestmentContract::add_collateral(
+            env,
+            collateral_token_addr,
+            collateral_token_amount,
+            collateral_token_symbol,
+            collateral_addr,
+        )
+    }
+
+    fn pay_with_collateral(env: Env, token_id: u32) -> Result<i128, Error> {
+        InvestmentContract::pay_with_collateral(env, token_id)
+    }
+
+    fn return_collateral_to_company(env: Env) -> Result<i128, Error> {
+        InvestmentContract::return_collateral_to_company(env)
+    }
+
+    fn paused(env: Env, caller: Address) -> bool {
+        InvestmentContract::paused(&env, caller)
+    }
+
+    fn pause(env: Env, caller: Address) {
+        <InvestmentContract as Pausable>::pause(&env, caller)
+    }
+
+    fn unpause(env: Env, caller: Address) {
+        <InvestmentContract as Pausable>::unpause(&env, caller)
     }
 }

@@ -1,200 +1,194 @@
-# The Equillar Soroban Contract
+# Equillar - Income-Based Investment Contract
 
 > [!WARNING]
-> This contract is useful for learning and should not be used in production without professional auditing. Please refer to the license for more information.
+> This contract has not been audited. Do not use in production without a professional security review. See LICENSE for details.
 
-## Structure
+## Overview
 
-This repository uses the [recommended structure](https://developers.stellar.org/docs/build/smart-contracts/getting-started/hello-world#create-a-new-project) for a Soroban project:
+Equillar is a Soroban smart contract for income-based financing on Stellar. It lets a project raise funds from multiple investors, represent each position as an NFT, and execute scheduled repayments on-chain with optional collateral and emergency settlement.
+
+The current implementation follows a modular architecture with role-based access control:
+
+- `admin`: governance and privileged operations.
+- `operator`: allowed to create investments.
+- `company`: approved source/target addresses for treasury and collateral-provider flows.
+- `manager`: approved recipients for commission withdrawals.
+
+Core dependencies include OpenZeppelin Stellar ecosystem crates (`stellar-access`, `stellar-macros`, `stellar-tokens`) and Soroban SDK.
+
+## Monorepo Structure
 
 ```text
 .
-├── contracts
-│   └── hello_world
-│       ├── src
-│       │   ├── lib.rs
-│       │   └── test.rs
-│       └── Cargo.toml
 ├── Cargo.toml
-└── README.md
+├── README.md
+└── contracts/
+    └── investment-income-based/
+        ├── Cargo.toml
+        ├── Makefile
+        ├── src/
+        ├── tests/
+        └── test_snapshots/
 ```
 
-- New Soroban contracts can be put in `contracts`
-- Contracts should have their own `Cargo.toml` files that rely on the top-level `Cargo.toml` workspace for their dependencies.
-- 
-## Overview
+## Contract Module Architecture
 
-The Equillar Investment Contract is a Soroban smart contract designed for managing investments on the Stellar network. It enables:
+Main crate: `contracts/investment-income-based`
 
-- **Capital contributions**: Investors can contribute funds toward a project's funding goal
-- **Time-based Returns**: Investors receive periodic payments (monthly) over a defined period
-- **Flexible Return Models**: Supports both Reverse Loan and Coupon return types
-- **NFT Representation**: Each investment is represented as a Non-Fungible Token (NFT)
-- **Automated Payment Management**: Tracks and processes investor payments with claim mechanisms
-- **Admin Controls**: Owner-controlled operations for payment processing, fund management, and contract pausing
+```text
+src/
+├── lib.rs
+├── contract.rs
+├── interface.rs
+├── constants.rs
+├── investment/
+│   ├── mod.rs
+│   ├── allocation.rs
+│   ├── storage.rs
+│   ├── types.rs
+│   └── events.rs
+├── payments/
+│   ├── mod.rs
+│   └── events.rs
+├── treasury/
+│   ├── mod.rs
+│   └── events.rs
+├── emergency/
+│   ├── mod.rs
+│   ├── types.rs
+│   └── events.rs
+├── collateral/
+│   ├── mod.rs
+│   └── events.rs
+├── shared/
+│   ├── mod.rs
+│   ├── balance.rs
+│   ├── storage.rs
+│   ├── token.rs
+│   ├── types.rs
+│   └── events.rs
+└── validation/
+    ├── mod.rs
+    ├── investment.rs
+    ├── payments.rs
+    ├── treasury.rs
+    ├── collateral.rs
+    └── emergency.rs
+```
 
-The contract uses [OpenZeppelin's Stellar libraries](https://docs.openzeppelin.com/stellar-contracts) for access control (Ownable), pausability, and NFT functionality.
+### Responsibilities by Module
 
-## Core Functions
+- `contract.rs`: external entrypoints, access checks, pause guards, and orchestration.
+- `interface.rs`: stable trait/API surface and generated client bindings.
+- `investment/`: position creation, refunding, schedule logic, and allocation math.
+- `payments/`: regular round payment processing.
+- `treasury/`: company transfers, project withdrawals, and commission withdrawals.
+- `emergency/`: emergency-close activation and proportional payout flow.
+- `collateral/`: collateral deposit, valuation, liquidation, and return.
+- `shared/`: cross-domain state types, storage helpers, token client helpers, balance accounting, and common events.
+- `validation/`: reusable business-rule validations and canonical `Error` enum.
 
-### Initialization
+## Constructor Parameters
 
-- **`__constructor`**: Initializes the contract with investment parameters (interest rate, funding goal, return type, minimum investment, etc.)
+| Parameter | Type | Description |
+|---|---|---|
+| `i_rate` | `u32` | Annual interest rate in basis points (for example, `500 = 5%`). Must be > 0. |
+| `fundraising_days` | `u64` | Fundraising window duration in days. |
+| `claim_block_days` | `u64` | Delay after fundraising before regular payments can start. |
+| `goal` | `i128` | Maximum capital to raise. Must be > 0. |
+| `return_type` | `u32` | `1 = ReverseLoan`, `2 = Coupon`. |
+| `return_months` | `u32` | Number of payment rounds. Must be > 0. |
+| `min_per_investment` | `i128` | Minimum amount per investment. Must be > 0. |
 
-### Investment Functions
+## Public API (Current)
 
-- **`invest`**: Allows users to invest funds. Mints an NFT token ID representing the investment and calculates returns based on the configured parameters
-- **`claim`**: Allows investors to claim all their accumulated pending payments at once (self-service)
+### Governance and Roles
 
-### Admin Functions (Owner Only)
+| Function | Access | Purpose |
+|---|---|---|
+| `__constructor(...)` | `admin_addr` auth | Initializes metadata, validates params, stores config, and sets admin. |
+| `grant_operator(operator)` | admin | Grants operator role. |
+| `revoke_operator(operator)` | admin | Revokes operator role. |
+| `grant_company(company)` | admin | Grants company role. |
+| `revoke_company(company)` | admin | Revokes company role. |
+| `grant_manager(manager)` | admin | Grants manager role. |
+| `revoke_manager(manager)` | admin | Revokes manager role. |
+| `transfer_admin_role(new_admin)` | admin | Starts two-step admin transfer (time-limited acceptance). |
+| `accept_admin_transfer_role()` | admin-gated endpoint | Accepts pending admin transfer. |
 
-- **`process_investor_payment`**: Processes a single monthly payment to an investor (admin-driven)
-- **`single_withdrawn`**: Withdraws funds from the project balance to the project address
-- **`add_company_transfer`**: Adds funds from the admin to the reserve balance for upcoming payments
-- **`move_funds_to_the_reserve`**: Internally moves funds from project balance to reserve balance
-- **`get_contract_balance`**: Retrieves current contract balance breakdown (project, reserve, commission)
-- **`check_reserve_balance`**: Calculates additional funds needed for upcoming payments (within next week)
+### Investment Lifecycle
 
-### Pausable Functions
+| Function | Access | Purpose |
+|---|---|---|
+| `invest(addr, amount)` | role `operator` on `addr` | Accepts investment and mints NFT position. |
+| `refund_investor(token_id)` | admin | Refunds investment during valid refund window. |
+| `process_investor_payment(token_id)` | admin | Executes one regular payment round for a position. |
 
-- **`pause`**: Pauses the contract, preventing investments and payments
-- **`unpause`**: Resumes contract operations
+### Treasury and Balances
 
-## Modules
+| Function | Access | Purpose |
+|---|---|---|
+| `add_company_transfer(amount, from)` | admin + role `company` on `from` | Deposits company funds into reserve for next round. |
+| `withdrawn(amount, to)` | admin + role `company` on `to` | Withdraws project funds to company address. |
+| `withdrawn_commissions(to)` | admin + role `manager` on `to` | Withdraws accumulated commissions to manager address. |
+| `get_contract_balance(caller)` | caller must be admin or hold any role | Returns `ContractBalance` snapshot. |
 
-### `contract.rs`
-The main contract implementation containing all public functions and business logic for the `InvestmentContract`.
+### Emergency and Collateral
 
-### `investment.rs`
-Defines the `Investment` struct and related logic for individual investments, including:
-- Investment creation
-- Payment processing
-- Return calculations
-- Support for two return types: **Reverse Loan** (principal + interest distributed evenly) and **Coupon** (interest-only payments with final principal payment)
+| Function | Access | Purpose |
+|---|---|---|
+| `activate_emergency_close()` | admin | Freezes emergency pool and transitions to emergency settlement. |
+| `emergency_pay_investor(token_id)` | admin | Pays one investor proportionally from emergency pool. |
+| `add_collateral(token, amount, symbol, collateral_addr)` | admin + role `company` on `collateral_addr` | Deposits collateral and updates tracked collateral state. |
+| `pay_with_collateral(token_id)` | admin | Settles a position using collateral pool. |
+| `return_collateral_to_company()` | admin | Returns remaining collateral to provider. |
 
-### `balance.rs`
-Manages contract balance accounting with the `ContractBalance` struct:
-- Tracks reserve balance (for investor payments)
-- Tracks project balance (for company withdrawal)
-- Tracks commission balance
-- Implements progressive commission rates based on investment amount
-- Provides balance recalculation methods for various operations
-- Uses OpenZeppelin's `Wad` library for high-precision fixed-point arithmetic (18 decimals) to accurately calculate commission splits and reserve allocations without rounding errors
+### Pause Control
 
-### `claim.rs`
-Handles payment claim scheduling and calculations:
-- `Claim` struct stores next payment timestamp and amount
-- Calculates how many payment periods have elapsed since the last claim
-- Determines when payments become available
-
-### `data.rs`
-Core data structures and configuration:
-- `ContractData`: Stores contract-level configuration (interest rate, goal, return type, token address, etc.)
-- `State` enum: Tracks contract state (Active, FundsReached)
-- `InvestmentContractParams`: Constructor parameters
-
-### `validation.rs`
-Centralized validation logic and error definitions:
-- Validates investment amounts, balances, and timing constraints
-- Defines the `Error` enum with all possible contract errors
-- Ensures business rules are enforced (e.g., minimum investment, payment timing, goal limits)
-
-### `storage.rs`
-Storage management layer providing read/write operations for:
-- Contract data
-- Individual investments
-- Claims map
-- Contract balances
-- Uses Soroban's persistent storage primitives
-
-### `constants.rs`
-Defines time constants used throughout the contract:
-- `SECONDS_IN_DAY`, `SECONDS_IN_WEEK`, `SECONDS_IN_MONTH`
-
-### `lib.rs`
-The crate root that exports the contract and serves as the entry point for the Soroban WebAssembly module.
+| Function | Access | Purpose |
+|---|---|---|
+| `paused(caller)` | caller must be admin or hold any role | Returns pause flag. |
+| `pause(caller)` | admin | Pauses guarded operations. |
+| `unpause(caller)` | admin | Unpauses guarded operations. |
 
 ## Tests
 
-The test suite is organized into multiple files for better maintainability:
-
-### Test Structure
-
-```
+```text
 tests/
-├── common/
-│   └── mod.rs           # Shared test utilities and helper functions
-├── error_tests.rs       # Tests for error conditions and validation
-└── success_tests.rs     # Tests for successful operations
+├── common/mod.rs
+├── success_tests.rs
+└── error_tests.rs
 ```
 
-### `common/mod.rs`
-Contains shared test utilities used across all test files:
-- **`create_investment_contract`**: Sets up a test environment with contract, token, and addresses
-- **`create_token_contract`**: Creates a Stellar Asset Contract for testing
-- **`TestData` struct**: Encapsulates all test context (addresses, clients, tokens)
-- Helper functions for common test scenarios like minting tokens and making investments
+Run all tests:
 
-### `error_tests.rs` (19 tests)
-Tests that verify the contract properly handles error conditions:
-- **Constructor validation errors**: Invalid parameters (zero interest rate, zero goal, invalid return type, etc.)
-- **Investment errors**: Amount below minimum, insufficient balance, goal exceeded, contract paused
-- **Payment processing errors**: Invalid token IDs, insufficient reserve, payment timing violations
-- **Authorization errors**: Unauthorized pause/unpause, unauthorized withdrawals
-- **Withdrawal errors**: Insufficient balances for various operations
-
-Each test uses `#[should_panic]` to verify the contract panics with the expected error.
-
-### `success_tests.rs` (18 tests)
-Tests that verify successful contract operations:
-- **Commission calculation**: Tests the progressive commission rate algorithm
-- **Investment flows**: Both Reverse Loan and Coupon return types
-- **Balance management**: Contract balance tracking, reserve calculations, fund movements
-- **Payment processing**: Single and multiple payment claims
-- **Pausable functionality**: Pause and unpause operations
-- **Admin operations**: Withdrawals, company transfers, fund movements
-- **Multi-investor scenarios**: Multiple investments from the same user, goal limits
-
-## Building and Testing
-
-### Prerequisites
-
-Ensure you have the Stellar/Soroban development environment set up:
-- Rust toolchain
-- Soroban CLI
-- Required dependencies from `Cargo.toml`
-
-For detailed setup instructions, refer to the [Stellar documentation](https://developers.stellar.org/docs/build/smart-contracts/getting-started/setup).
-
-### Running Tests
-
-Run all tests (37 total):
 ```bash
+cd contracts/investment-income-based
 cargo test
 ```
 
-Run specific test files:
+Compile tests only (fast validation):
+
 ```bash
-cargo test --test error_tests
-cargo test --test success_tests
+cd contracts/investment-income-based
+cargo test -q --no-run
 ```
 
-Run a specific test:
-```bash
-cargo test test_investment_reverse_loan
-```
+## Build
 
-### Building the Contract
-
-Build for development (unoptimized):
 ```bash
+cd contracts/investment-income-based
+
+# Dev build
 cargo build
-```
 
-And then generate the wasm file:
-```bash
+# Optimized WASM build
 stellar contract build
 ```
 
-Deploy to Stellar testnet using the Soroban CLI. Refer to the [official deployment guide](https://developers.stellar.org/docs/build/smart-contracts/getting-started/deploy-to-testnet) for detailed instructions.
+For deployment on testnet, see Stellar docs:
+https://developers.stellar.org/docs/build/smart-contracts/getting-started/deploy-to-testnet
 
+## License
+
+Apache 2.0. See [LICENSE](LICENSE).
