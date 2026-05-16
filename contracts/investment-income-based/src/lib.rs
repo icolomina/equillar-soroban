@@ -1,12 +1,30 @@
 #![no_std]
 
-pub mod amounts;
-pub mod balance;
-mod constants;
-pub mod contract;
-pub mod data;
-pub mod investment;
-mod storage;
-mod validation;
 pub mod collateral;
-mod events;
+pub mod contract;
+pub mod emergency;
+pub mod interface;
+mod constants;
+pub mod investment;
+pub mod payments;
+pub mod shared;
+pub mod treasury;
+pub mod validation;
+
+pub use validation::Error;
+
+#[macro_export]
+macro_rules! require {
+    ($cond:expr, $err:expr) => {
+        if !$cond {
+            return Err($err);
+        }
+    };
+    ($($cond:expr, $err:expr),+) => {
+        $(
+            if !$cond {
+                return Err($err);
+            }
+        )+
+    };
+}

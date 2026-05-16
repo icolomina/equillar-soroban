@@ -1,10 +1,13 @@
 mod common;
 
-use common::{assert_contract_balance, create_investment_contract, do_payment_round};
-use investment_income_based::{amounts::calculate_rate_denominator};
-use soroban_sdk::{Address, Env, String, testutils::{Address as _}};
+use common::{assert_contract_balance, create_investment_contract, do_payment_round, invest_as_operator};
+use investment_income_based::investment::allocation::calculate_rate_denominator;
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    Address, Env, String,
+};
+
 use crate::common::create_token_contract;
-use soroban_sdk::testutils::Ledger;
 
 /// Verifies that `calculate_rate_denominator` returns the correct denominator
 /// for a range of investment amounts at a fixed 7-decimal precision.
@@ -36,7 +39,7 @@ fn test_flow_with_coupon() {
 
     assert_contract_balance(&test_data, 0, 0, 0, 0, 0, 0);
 
-    let inv = test_data.client.invest(&u, &1000);
+    let inv = invest_as_operator(&test_data, &u, &1000);
 
     assert_eq!(inv.commission, 5_i128);
     assert_eq!(inv.deposited, 995_i128);
@@ -47,7 +50,6 @@ fn test_flow_with_coupon() {
     assert_contract_balance(&test_data, 945, 50, 5, 0, 995, 0);
 
     test_data.token_admin.mint(&test_data.project_address, &2000);
-    test_data.token.transfer(&test_data.project_address, &test_data.admin, &2000);
 
     do_payment_round(&e, &test_data, inv.token_id, 15,   12,   1, false);
     assert_contract_balance(&test_data, 945, 53, 5, 12, 995, 15);
@@ -77,7 +79,7 @@ fn test_flow_with_reverse_loan() {
 
     let u: Address = Address::generate(&e);
     test_data.token_admin.mint(&u, &1000);
-    let inv = test_data.client.invest(&u, &1000);
+    let inv = invest_as_operator(&test_data, &u, &1000);
     assert_contract_balance(&test_data, 945, 50, 5, 0, 995, 0);
 
     assert_eq!(inv.commission, 5_i128);
@@ -87,7 +89,6 @@ fn test_flow_with_reverse_loan() {
     assert_eq!(inv.regular_payment, 261_i128);
 
     test_data.token_admin.mint(&test_data.project_address, &2000);
-    test_data.token.transfer(&test_data.project_address, &test_data.admin, &2000);
 
     do_payment_round(&e, &test_data, inv.token_id, 261, 261,  1, false);
     assert_contract_balance(&test_data, 945, 50, 5, 261, 995, 261);
@@ -115,17 +116,16 @@ fn test_multiple_investors_same_payment_round() {
     test_data.token_admin.mint(&u1, &1000);
     test_data.token_admin.mint(&u2, &1000);
 
-    let inv1 = test_data.client.invest(&u1, &1000);
-    let inv2 = test_data.client.invest(&u2, &1000);
+    let inv1 = invest_as_operator(&test_data, &u1, &1000);
+    let inv2 = invest_as_operator(&test_data, &u2, &1000);
 
     assert_contract_balance(&test_data, 1890, 100, 10, 0, 1990, 0);
 
     test_data.token_admin.mint(&test_data.project_address, &3000);
-    test_data.token.transfer(&test_data.project_address, &test_data.admin, &3000);
 
     e.ledger().set_timestamp(15 * 86400);
 
-    test_data.client.add_company_transfer(&522_i128);
+    test_data.client.add_company_transfer(&522_i128, &test_data.project_address);
     assert_contract_balance(&test_data, 1890, 622, 10, 0, 1990, 522);
 
     let inv1_paid = test_data.client.process_investor_payment(&inv1.token_id);
@@ -190,8 +190,93 @@ fn test_unpause() {
     test_data.client.unpause(&test_data.admin);
 
     test_data.token_admin.mint(&test_data.user, &1000000);
-    let investment = test_data.client.invest(&test_data.user, &100000);
+    let investment = invest_as_operator(&test_data, &test_data.user, &100000);
     assert!(investment.deposited > 0);
+}
+
+#[test]
+fn test_revoke_operator_blocks_invest() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let operator = Address::generate(&e);
+    test_data.token_admin.mint(&operator, &2_000_i128);
+
+    test_data.client.grant_operator(&operator);
+    let _ = test_data.client.invest(&operator, &1_000_i128);
+
+    test_data.client.revoke_operator(&operator);
+    let invest_result = test_data.client.try_invest(&operator, &200_i128);
+    assert!(invest_result.is_err());
+}
+
+/// Verifies that granting `company` enables receiving project withdrawals,
+/// and revoking it blocks `withdrawn` for that address.
+#[test]
+fn test_grant_and_revoke_company_role() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let investor = Address::generate(&e);
+    let company_alt = Address::generate(&e);
+    test_data.token_admin.mint(&investor, &1_000_i128);
+    invest_as_operator(&test_data, &investor, &1_000_i128);
+
+    e.ledger().set_timestamp(8 * 86_400);
+
+    test_data.client.grant_company(&company_alt);
+    let before = test_data.token.balance(&company_alt);
+    test_data.client.withdrawn(&100_i128, &company_alt);
+    let after = test_data.token.balance(&company_alt);
+    assert_eq!(after - before, 100_i128);
+
+    test_data.client.revoke_company(&company_alt);
+    let withdrawn_result = test_data.client.try_withdrawn(&1_i128, &company_alt);
+    assert!(withdrawn_result.is_err());
+}
+
+/// Verifies that revoking `manager` blocks commission withdrawals to that address.
+#[test]
+fn test_revoke_manager_blocks_withdrawn_commissions() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let investor = Address::generate(&e);
+    let manager_alt = Address::generate(&e);
+    test_data.token_admin.mint(&investor, &1_000_i128);
+    invest_as_operator(&test_data, &investor, &1_000_i128);
+
+    e.ledger().set_timestamp(8 * 86_400);
+
+    test_data.client.grant_manager(&manager_alt);
+    test_data.client.revoke_manager(&manager_alt);
+
+    let commissions_result = test_data.client.try_withdrawn_commissions(&manager_alt);
+    assert!(commissions_result.is_err());
+}
+
+/// Verifies the admin-transfer entrypoints are reachable in tests.
+/// Under the current mocked auth setup both `try_*` calls are expected to fail,
+/// but this still guards the generated client methods and wiring.
+#[test]
+fn test_transfer_and_accept_admin_role_methods_are_reachable() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true,
+    );
+
+    let new_admin = Address::generate(&e);
+    let transfer_result = test_data.client.try_transfer_admin_role(&new_admin);
+    assert!(transfer_result.is_err());
+
+    let accept_result = test_data.client.try_accept_admin_transfer_role();
+    assert!(accept_result.is_err());
 }
 
 
@@ -216,9 +301,10 @@ fn test_add_collateral() {
 
     let collateral_addr = Address::generate(&e);
     let (token_collateral, token_collateral_admin)  = create_token_contract(&e, &test_data.admin);
+    test_data.client.grant_company(&collateral_addr);
     token_collateral_admin.mint(&collateral_addr, &200_i128);
     test_data.token_admin.mint(&test_data.user, &150_i128);
-    test_data.client.invest(&test_data.user, &150_i128);
+    invest_as_operator(&test_data, &test_data.user, &150_i128);
     let collateral = test_data.client.add_collateral(
         &token_collateral.address, 
         &100_i128, 
@@ -259,6 +345,7 @@ fn test_pay_with_collateral() {
 
     let collateral_addr = Address::generate(&e);
     let (token_collateral, token_collateral_admin)  = create_token_contract(&e, &test_data.admin);
+    test_data.client.grant_company(&collateral_addr);
     token_collateral_admin.mint(&collateral_addr, &4000_i128);
 
     let user2 = soroban_sdk::Address::generate(&e);
@@ -268,9 +355,9 @@ fn test_pay_with_collateral() {
     test_data.token_admin.mint(&user2, &1000000_i128);
     test_data.token_admin.mint(&user3, &1000000_i128);
 
-    let inv1 = test_data.client.invest(&test_data.user, &2000_i128);
-    let inv2 = test_data.client.invest(&user2, &2000_i128);
-    let inv3 = test_data.client.invest(&user3, &1000_i128);
+    let inv1 = invest_as_operator(&test_data, &test_data.user, &2000_i128);
+    let inv2 = invest_as_operator(&test_data, &user2, &2000_i128);
+    let inv3 = invest_as_operator(&test_data, &user3, &1000_i128);
 
     test_data.client.add_collateral(
         &token_collateral.address, 
@@ -308,6 +395,7 @@ fn test_return_collateral_to_company() {
 
     let collateral_addr = Address::generate(&e);
     let (token_collateral, token_collateral_admin)  = create_token_contract(&e, &test_data.admin);
+    test_data.client.grant_company(&collateral_addr);
     token_collateral_admin.mint(&collateral_addr, &4000_i128);
 
     let user2 = soroban_sdk::Address::generate(&e);
@@ -317,9 +405,9 @@ fn test_return_collateral_to_company() {
     test_data.token_admin.mint(&user2, &1000000_i128);
     test_data.token_admin.mint(&user3, &1000000_i128);
 
-    test_data.client.invest(&test_data.user, &2000_i128);
-    test_data.client.invest(&user2, &2000_i128);
-    test_data.client.invest(&user3, &1000_i128);
+    invest_as_operator(&test_data, &test_data.user, &2000_i128);
+    invest_as_operator(&test_data, &user2, &2000_i128);
+    invest_as_operator(&test_data, &user3, &1000_i128);
 
     test_data.client.add_collateral(
         &token_collateral.address, 
@@ -346,22 +434,21 @@ fn test_withdrawn() {
 
     let u: Address = Address::generate(&e);
     test_data.token_admin.mint(&u, &1000);
-    test_data.client.invest(&u, &1000);
+    invest_as_operator(&test_data, &u, &1000);
 
     assert_contract_balance(&test_data, 945, 50, 5, 0, 995, 0);
     e.ledger().set_timestamp(8 * 86400);
 
     let balance_before = test_data.token.balance(&test_data.project_address);
-    test_data.client.withdrawn(&900_i128);
+    test_data.client.withdrawn(&900_i128, &test_data.project_address);
     let balance_after = test_data.token.balance(&test_data.project_address);
 
     assert_eq!(balance_after - balance_before, 900_i128);
     assert_contract_balance(&test_data, 45, 50, 5, 0, 995, 0);
 }
 
-/// Verifies that `add_company_transfer` requests authorization from both
-/// required actors: owner (`admin`) and `project_address`.
-/// The test inspects `e.auths()` to ensure both addresses participated.
+/// Verifies that `add_company_transfer` requests authorization from admin.
+/// `from` is role-validated (`has_role`) but does not require root auth.
 #[test]
 fn test_add_company_transfer_authorization_verification() {
     let e = Env::default();
@@ -371,49 +458,18 @@ fn test_add_company_transfer_authorization_verification() {
 
     let u: Address = Address::generate(&e);
     test_data.token_admin.mint(&u, &1000);
-    test_data.client.invest(&u, &1000);
+    invest_as_operator(&test_data, &u, &1000);
 
     test_data.token_admin.mint(&test_data.project_address, &500);
-    test_data.token.transfer(&test_data.project_address, &test_data.admin, &500);
 
     e.ledger().set_timestamp(15 * 86400);
     let amount: i128 = 261;
-    test_data.client.add_company_transfer(&amount);
+    test_data.client.add_company_transfer(&amount, &test_data.project_address);
 
     let auths = e.auths();
 
     let admin_auth = auths.iter().find(|(addr, _)| *addr == test_data.admin);
-    let project_auth = auths.iter().find(|(addr, _)| *addr == test_data.project_address);
-
-    assert!(admin_auth.is_some(), "Owner auth must be requested");
-    assert!(project_auth.is_some(), "project_address auth must be requested");
-}
-
-/// Verifies that `withdrawn` requests authorization from both required actors:
-/// owner (`admin`) and `project_address`.
-/// The test validates the presence of both signers in `e.auths()`.
-#[test]
-fn test_withdrawn_authorization_verification() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
-    );
-
-    let u: Address = Address::generate(&e);
-    test_data.token_admin.mint(&u, &1000);
-    test_data.client.invest(&u, &1000);
-
-    e.ledger().set_timestamp(8 * 86400);
-
-    let amount: i128 = 500;
-    test_data.client.withdrawn(&amount);
-
-    let auths = e.auths();
-    let admin_auth = auths.iter().find(|(addr, _)| *addr == test_data.admin);
-    let project_auth = auths.iter().find(|(addr, _)| *addr == test_data.project_address);
-
-    assert!(admin_auth.is_some(), "Owner auth must be requested");
-    assert!(project_auth.is_some(), "project_address auth must be requested");
+    assert!(admin_auth.is_some(), "Admin auth must be requested");
 }
 
 /// Verifies that the same user can invest multiple times, receiving a distinct
@@ -433,9 +489,9 @@ fn test_invest_same_user_multiple_times() {
     let u: Address = Address::generate(&e);
     test_data.token_admin.mint(&u, &3000);
 
-    let inv1 = test_data.client.invest(&u, &1000);
-    let inv2 = test_data.client.invest(&u, &1000);
-    let inv3 = test_data.client.invest(&u, &1000);
+    let inv1 = invest_as_operator(&test_data, &u, &1000);
+    let inv2 = invest_as_operator(&test_data, &u, &1000);
+    let inv3 = invest_as_operator(&test_data, &u, &1000);
 
     assert_ne!(inv1.token_id, inv2.token_id);
     assert_ne!(inv2.token_id, inv3.token_id);
@@ -449,11 +505,10 @@ fn test_invest_same_user_multiple_times() {
     assert_contract_balance(&test_data, 2835, 150, 15, 0, 2985, 0);
 
     test_data.token_admin.mint(&test_data.project_address, &1000_i128);
-    test_data.token.transfer(&test_data.project_address, &test_data.admin, &1000_i128);
 
     e.ledger().set_timestamp(15 * 86400);
 
-    test_data.client.add_company_transfer(&1000_i128);
+    test_data.client.add_company_transfer(&1000_i128, &test_data.project_address);
     let inv1_after = test_data.client.process_investor_payment(&inv1.token_id);
 
     assert_eq!(inv1_after.payments_transferred, 1_u32);
@@ -479,7 +534,7 @@ fn test_refund_investor() {
 
     let u: Address = Address::generate(&e);
     test_data.token_admin.mint(&u, &1000);
-    let inv = test_data.client.invest(&u, &1000);
+    let inv = invest_as_operator(&test_data, &u, &1000);
 
     assert_contract_balance(&test_data, 945, 50, 5, 0, 995, 0);
 
@@ -492,7 +547,7 @@ fn test_refund_investor() {
     assert_eq!(refunded, 1000_i128);
     assert_eq!(balance_after - balance_before, 1000_i128);
 
-    let contract_bal = test_data.client.get_contract_balance();
+    let contract_bal = test_data.client.get_contract_balance(&test_data.admin);
     assert_eq!(contract_bal.project, 0_i128);
     assert_eq!(contract_bal.reserve, 0_i128);
     assert_eq!(contract_bal.comission, 0_i128);
@@ -500,9 +555,10 @@ fn test_refund_investor() {
 }
 
 /// Verifies that `withdrawn_commissions` transfers the full accumulated commission
-/// to the owner, returns the correct amount, and updates `comission_withdrawal`.
+/// to the provided manager/recipient address, returns the correct amount,
+/// and updates `comission_withdrawal`.
 /// Investing 1000 tokens generates 5 in commission; after fundraising ends the
-/// owner should receive exactly 5 tokens.
+/// recipient should receive exactly 5 tokens.
 #[test]
 fn test_withdrawn_commissions() {
     let e = Env::default();
@@ -512,20 +568,20 @@ fn test_withdrawn_commissions() {
 
     let u: Address = Address::generate(&e);
     test_data.token_admin.mint(&u, &1000);
-    test_data.client.invest(&u, &1000);
+    invest_as_operator(&test_data, &u, &1000);
 
     assert_contract_balance(&test_data, 945, 50, 5, 0, 995, 0);
 
     e.ledger().set_timestamp(8 * 86400);
 
-    let owner_balance_before = test_data.token.balance(&test_data.admin);
-    let withdrawn = test_data.client.withdrawn_commissions();
-    let owner_balance_after = test_data.token.balance(&test_data.admin);
+    let owner_balance_before = test_data.token.balance(&test_data.project_address);
+    let withdrawn = test_data.client.withdrawn_commissions(&test_data.project_address);
+    let owner_balance_after = test_data.token.balance(&test_data.project_address);
 
     assert_eq!(withdrawn, 5_i128);
     assert_eq!(owner_balance_after - owner_balance_before, 5_i128);
 
-    let contract_bal = test_data.client.get_contract_balance();
+    let contract_bal = test_data.client.get_contract_balance(&test_data.admin);
     assert_eq!(contract_bal.comission_withdrawal, 5_i128);
 }
 
@@ -533,7 +589,7 @@ fn test_withdrawn_commissions() {
 /// authorization from the admin address.
 /// The test inspects `e.auths()` after each call.
 #[test]
-fn test_owner_authorization_verification() {
+fn test_admin_authorization_verification() {
     let e = Env::default();
     let test_data = create_investment_contract(
         &e,
@@ -552,21 +608,23 @@ fn test_owner_authorization_verification() {
     let auths = e.auths();
     assert_eq!(auths.len(), 1, "Should request exactly one authorization");
 
-    assert_eq!(auths[0].0, test_data.admin, "Authorization should be from admin/owner");
+    let admin_auth = auths.iter().find(|(addr, _)| *addr == test_data.admin);
+    assert!(admin_auth.is_some(), "Authorization should include admin");
 
     test_data.client.unpause(&test_data.admin);
 
     let auths = e.auths();
     assert_eq!(auths.len(), 1, "Should request exactly one authorization");
-    assert_eq!(auths[0].0, test_data.admin, "Authorization should be from admin/owner");
+    let admin_auth = auths.iter().find(|(addr, _)| *addr == test_data.admin);
+    assert!(admin_auth.is_some(), "Authorization should include admin");
 }
 
 
-/// Verifies that a single investor receives the full reserve balance when
-/// they are the only active investment. With 1 investor holding 100% of
-/// `payment_obligations`, the proportional calculation yields the entire reserve.
-/// After the call the investment is marked completed, `reserve` reaches 0,
-/// and `payment_obligations` is decremented by `remaining_obligations`.
+/// Verifies that a single investor receives the full emergency pool when
+/// they are the only active investment. In emergency-close mode, the frozen
+/// pool is `reserve + project`, so the only investor receives the full pool.
+/// After the call the investment is marked completed and both `reserve` and
+/// `project` reach 0.
 #[test]
 fn test_emergency_pay_investor_single_investor() {
     let e = Env::default();
@@ -576,27 +634,30 @@ fn test_emergency_pay_investor_single_investor() {
 
     let u: Address = Address::generate(&e);
     test_data.token_admin.mint(&u, &1000);
-    let inv = test_data.client.invest(&u, &1000);
+    let inv = invest_as_operator(&test_data, &u, &1000);
 
     e.ledger().set_timestamp(8 * 86400);
+    test_data.client.withdrawn_commissions(&test_data.project_address);
+    test_data.client.activate_emergency_close();
 
     let balance_before = test_data.token.balance(&u);
     let paid = test_data.client.emergency_pay_investor(&inv.token_id);
     let balance_after = test_data.token.balance(&u);
 
-    assert_eq!(paid, 50_i128);
-    assert_eq!(balance_after - balance_before, 50_i128);
+    assert_eq!(paid, 995_i128);
+    assert_eq!(balance_after - balance_before, 995_i128);
 
-    let b = test_data.client.get_contract_balance();
+    let b = test_data.client.get_contract_balance(&test_data.admin);
     assert_eq!(b.reserve, 0_i128);
+    assert_eq!(b.project, 0_i128);
     assert_eq!(b.payment_obligations, 0_i128);
-    assert_eq!(b.payments, 50_i128);
+    assert_eq!(b.payments, 995_i128);
 }
 
 /// Verifies that three investors with different investment amounts each receive
-/// a proportional share of the reserve according to their remaining obligations.
-/// The reserve must be fully distributed (sum of all payments == initial reserve),
-/// allowing a small integer-truncation remainder (dust).
+/// a proportional share of the emergency pool according to remaining obligations.
+/// The full emergency pool (`reserve + project`) is fully distributed and the
+/// last claim absorbs any rounding remainder.
 #[test]
 fn test_emergency_pay_investor_multiple_investors_proportional() {
     let e = Env::default();
@@ -611,13 +672,16 @@ fn test_emergency_pay_investor_multiple_investors_proportional() {
     test_data.token_admin.mint(&user2, &2000);
     test_data.token_admin.mint(&user3, &1000);
 
-    let inv1 = test_data.client.invest(&test_data.user, &2000);
-    let inv2 = test_data.client.invest(&user2, &2000);
-    let inv3 = test_data.client.invest(&user3, &1000);
+    let inv1 = invest_as_operator(&test_data, &test_data.user, &2000);
+    let inv2 = invest_as_operator(&test_data, &user2, &2000);
+    let inv3 = invest_as_operator(&test_data, &user3, &1000);
 
     e.ledger().set_timestamp(8 * 86400);
+    test_data.client.withdrawn_commissions(&test_data.project_address);
+    test_data.client.activate_emergency_close();
 
-    let reserve_before = test_data.client.get_contract_balance().reserve;
+    let balance_before = test_data.client.get_contract_balance(&test_data.admin);
+    let emergency_pool_before = balance_before.reserve + balance_before.project;
 
     let b1_before = test_data.token.balance(&test_data.user);
     let paid1 = test_data.client.emergency_pay_investor(&inv1.token_id);
@@ -637,16 +701,16 @@ fn test_emergency_pay_investor_multiple_investors_proportional() {
     assert_eq!(paid1, paid2);
     assert_eq!(paid3, paid1 / 2);
 
-    assert!((paid1 + paid2 + paid3 - reserve_before).abs() <= 2);
+    assert_eq!(paid1 + paid2 + paid3, emergency_pool_before);
 
-    let b = test_data.client.get_contract_balance();
-    assert!(b.reserve <= 2);
+    let b = test_data.client.get_contract_balance(&test_data.admin);
+    assert_eq!(b.reserve, 0_i128);
+    assert_eq!(b.project, 0_i128);
     assert_eq!(b.payment_obligations, 0_i128);
 }
 
-/// Verifies that `emergency_pay_investor` requests authorization from both
-/// the owner (`admin`) and `project_address`.
-/// The test confirms both addresses appear in the collected authorizations.
+/// Verifies that `emergency_pay_investor` requests authorization from admin.
+/// Recipient/investor addresses are validated by business rules, not root auth.
 #[test]
 fn test_emergency_pay_investor_authorization() {
     let e = Env::default();
@@ -656,15 +720,14 @@ fn test_emergency_pay_investor_authorization() {
 
     let u: Address = Address::generate(&e);
     test_data.token_admin.mint(&u, &1000);
-    let inv = test_data.client.invest(&u, &1000);
+    let inv = invest_as_operator(&test_data, &u, &1000);
 
     e.ledger().set_timestamp(8 * 86400);
+    test_data.client.withdrawn_commissions(&test_data.project_address);
+    test_data.client.activate_emergency_close();
     test_data.client.emergency_pay_investor(&inv.token_id);
 
     let auths = e.auths();
     let admin_auth = auths.iter().find(|(addr, _)| *addr == test_data.admin);
-    let project_auth = auths.iter().find(|(addr, _)| *addr == test_data.project_address);
-
-    assert!(admin_auth.is_some(), "Owner auth must be requested");
-    assert!(project_auth.is_some(), "project_address auth must be requested");
+    assert!(admin_auth.is_some(), "Admin auth must be requested");
 }

@@ -1,7 +1,9 @@
-use soroban_sdk::{Address, Env, contracttype};
+use soroban_sdk::{contracttype, Address, Env};
 
-use crate::{constants::SECONDS_IN_DAY, investment::InvestmentReturnType};
+use crate::constants::SECONDS_IN_DAY;
+use crate::investment::InvestmentReturnType;
 
+/// Constructor parameters supplied at deployment.
 #[contracttype]
 pub struct InvestmentContractParams {
     pub i_rate: u32,
@@ -13,6 +15,7 @@ pub struct InvestmentContractParams {
     pub min_per_investment: i128,
 }
 
+/// Persisted immutable/semi-immutable configuration used across business flows.
 #[contracttype]
 pub struct ContractData {
     pub interest_rate: u32,
@@ -21,64 +24,53 @@ pub struct ContractData {
     pub ts_fundraising_ends: u64,
     pub ts_payments_start: u64,
     pub token: Address,
-    pub project_address: Address,
     pub price_oracle: Address,
     pub return_type: InvestmentReturnType,
     pub return_months: u32,
     pub min_per_investment: i128,
     pub goal: i128,
-    pub amount_to_pay_per_month: i128
+    pub amount_to_pay_per_month: i128,
 }
 
 impl ContractData {
-    /// Builds internal `ContractData` from constructor parameters.
+    /// Builds persisted configuration from deployment parameters.
     ///
-    /// Derives fundraising and payment start timestamps using day-based offsets
-    /// over current ledger timestamp.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `params.return_type` is invalid. This function is expected to be
-    /// called only after constructor validation has accepted the return type.
+    /// Computes fundraising and payment-start timestamps relative to current
+    /// ledger time.
     pub fn from_investment_contract_params(
         env: &Env,
         params: &InvestmentContractParams,
         token: Address,
-        project_address: Address,
         price_oracle: Address,
     ) -> Self {
-
         let ts_fundraising_ends = env.ledger().timestamp() + (params.fundraising_days * SECONDS_IN_DAY);
         let ts_payments_start = ts_fundraising_ends + (params.claim_block_days * SECONDS_IN_DAY);
 
-        ContractData {
+        Self {
             interest_rate: params.i_rate,
             claim_block_days: params.claim_block_days,
             fundraising_days: params.fundraising_days,
-            ts_fundraising_ends: ts_fundraising_ends,
-            ts_payments_start: ts_payments_start,
+            ts_fundraising_ends,
+            ts_payments_start,
             token,
-            project_address,
             price_oracle,
             return_type: InvestmentReturnType::from_number(params.return_type).unwrap(),
             return_months: params.return_months,
             min_per_investment: params.min_per_investment,
             goal: params.goal,
-            amount_to_pay_per_month: 0_i128
+            amount_to_pay_per_month: 0,
         }
     }
 }
 
 #[derive(Clone)]
 #[contracttype]
+/// Instance-storage keys used by contract state.
 pub enum DataKey {
     ContractData,
     NextPaymentRound,
     Investment(u32),
-    TotalSupply,
-    ClaimsMap,
-    MultisigRequest,
     ContractBalances,
+    EmergencyCloseState,
     Collateral,
-    CollateralSigners
 }

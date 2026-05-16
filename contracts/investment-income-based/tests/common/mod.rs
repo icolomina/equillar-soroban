@@ -1,9 +1,10 @@
 #![allow(dead_code)]
 
 pub use investment_income_based::{
-    contract::{InvestmentContract, InvestmentContractClient},
-    data::InvestmentContractParams,
+    contract::InvestmentContract,
+    interface::InvestmentContractClient,
     investment::Investment,
+    shared::InvestmentContractParams,
 };
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
@@ -17,14 +18,16 @@ pub mod reflector {
     use soroban_sdk::{contract, contractimpl};
 
     use super::*;
+
     #[contract]
     pub struct ReflectorMock;
+
     #[contractimpl]
     impl ReflectorOracle for ReflectorMock {
-        fn x_last_price(_env: &Env, _base_asset: Asset, _quote_asset: Asset) -> Option<PriceData>{
+        fn x_last_price(_env: &Env, _base_asset: Asset, _quote_asset: Asset) -> Option<PriceData> {
             Some(PriceData {
                 price: 936_i128,
-                timestamp: 65587445447_u64
+                timestamp: 65_587_445_447_u64,
             })
         }
 
@@ -35,13 +38,13 @@ pub mod reflector {
 }
 
 pub fn create_token_contract<'a>(
-    e: &Env,
+    env: &Env,
     admin: &Address,
 ) -> (TokenClient<'a>, TokenAdminClient<'a>) {
-    let sac = e.register_stellar_asset_contract_v2(admin.clone());
+    let sac = env.register_stellar_asset_contract_v2(admin.clone());
     (
-        TokenClient::new(e, &sac.address()),
-        TokenAdminClient::new(e, &sac.address()),
+        TokenClient::new(env, &sac.address()),
+        TokenAdminClient::new(env, &sac.address()),
     )
 }
 
@@ -55,7 +58,7 @@ pub struct TestData<'a> {
 }
 
 pub fn create_investment_contract(
-    e: &Env,
+    env: &Env,
     i_rate: u32,
     claim_block_days: u64,
     fundraising_days: u64,
@@ -66,18 +69,19 @@ pub fn create_investment_contract(
     mock_auths: bool,
 ) -> TestData<'_> {
     if mock_auths {
-        e.mock_all_auths();
+        env.mock_all_auths_allowing_non_root_auth();
     }
-    let admin = Address::generate(&e);
-    let user = Address::generate(&e);
-    let project_address = Address::generate(&e);
-    let reflector_id = e.register(reflector::ReflectorMock, ());
-    let (token, token_admin) = create_token_contract(&e, &admin);
-    let uri = String::from_str(&e, "https://example.com");
-    let name = String::from_str(&e, "Test Token");
-    let symbol = String::from_str(&e, "TT");
 
-    let investment_params: InvestmentContractParams = InvestmentContractParams {
+    let admin = Address::generate(env);
+    let user = Address::generate(env);
+    let project_address = Address::generate(env);
+    let reflector_id = env.register(reflector::ReflectorMock, ());
+    let (token, token_admin) = create_token_contract(env, &admin);
+    let uri = String::from_str(env, "https://example.com");
+    let name = String::from_str(env, "Test Token");
+    let symbol = String::from_str(env, "TT");
+
+    let investment_params = InvestmentContractParams {
         i_rate,
         claim_block_days,
         fundraising_days,
@@ -88,12 +92,11 @@ pub fn create_investment_contract(
     };
 
     let client = InvestmentContractClient::new(
-        e,
-        &e.register(
+        env,
+        &env.register(
             InvestmentContract {},
             (
                 admin.clone(),
-                project_address.clone(),
                 token.address.clone(),
                 reflector_id,
                 uri,
@@ -103,6 +106,9 @@ pub fn create_investment_contract(
             ),
         ),
     );
+
+    client.grant_company(&project_address);
+    client.grant_manager(&project_address);
 
     TestData {
         user,
@@ -123,17 +129,17 @@ pub fn assert_contract_balance(
     received_so_far: i128,
     reserve_contributions: i128,
 ) {
-    let b = test_data.client.get_contract_balance();
-    assert_eq!(b.project, project);
-    assert_eq!(b.reserve, reserve);
-    assert_eq!(b.comission, comission);
-    assert_eq!(b.payments, payments);
-    assert_eq!(b.received_so_far, received_so_far);
-    assert_eq!(b.reserve_contributions, reserve_contributions);
+    let balance = test_data.client.get_contract_balance(&test_data.admin);
+    assert_eq!(balance.project, project);
+    assert_eq!(balance.reserve, reserve);
+    assert_eq!(balance.comission, comission);
+    assert_eq!(balance.payments, payments);
+    assert_eq!(balance.received_so_far, received_so_far);
+    assert_eq!(balance.reserve_contributions, reserve_contributions);
 }
 
 pub fn do_payment_round(
-    e: &Env,
+    env: &Env,
     test_data: &TestData,
     token_id: u32,
     transfer_amount: i128,
@@ -141,14 +147,19 @@ pub fn do_payment_round(
     expected_transfers: u32,
     expected_completed: bool,
 ) -> Investment {
-    e.ledger().set_timestamp(e.ledger().timestamp() + (30 * 86401));
-    test_data.client.add_company_transfer(&transfer_amount);
-    let inv = test_data.client.process_investor_payment(&token_id);
-    assert_eq!(inv.paid, expected_paid);
-    assert_eq!(inv.payments_transferred, expected_transfers);
-    assert_eq!(inv.completed, expected_completed);
-    
-    inv
+    env.ledger().set_timestamp(env.ledger().timestamp() + (30 * 86_401));
+    test_data
+        .client
+        .add_company_transfer(&transfer_amount, &test_data.project_address);
+    let investment = test_data.client.process_investor_payment(&token_id);
+    assert_eq!(investment.paid, expected_paid);
+    assert_eq!(investment.payments_transferred, expected_transfers);
+    assert_eq!(investment.completed, expected_completed);
+
+    investment
 }
 
-
+pub fn invest_as_operator(test_data: &TestData, addr: &Address, amount: &i128) -> Investment {
+    test_data.client.grant_operator(addr);
+    test_data.client.invest(addr, amount)
+}

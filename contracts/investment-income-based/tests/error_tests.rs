@@ -1,486 +1,288 @@
 mod common;
 
-use common::{create_investment_contract};
-use soroban_sdk::{Address, Env, String, testutils::{Address as _, Ledger}};
+use common::{create_investment_contract, invest_as_operator};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    Address, Env, String,
+};
 
-use crate::common::{create_token_contract};
+use crate::common::create_token_contract;
 
-/// Ensures the constructor panics when `i_rate` is 0.
 #[test]
 #[should_panic(expected = "Error(Context, InvalidAction)")]
 fn test_constructor_interest_rate_zero() {
-    let e = Env::default();
-    create_investment_contract(&e, 0_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true);
+    let env = Env::default();
+    create_investment_contract(&env, 0_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 }
 
-/// Ensures the constructor panics when `goal` is 0.
 #[test]
 #[should_panic(expected = "Error(Context, InvalidAction)")]
 fn test_constructor_goal_zero() {
-    let e = Env::default();
-    create_investment_contract(&e, 500_u32, 7_u64, 7_u64, 0_i128, 1_u32, 4_u32, 100_i128, true);
+    let env = Env::default();
+    create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 0_i128, 1_u32, 4_u32, 100_i128, true);
 }
 
-/// Ensures the constructor panics when `return_type` is not a valid variant (0 is unsupported).
 #[test]
 #[should_panic(expected = "Error(Context, InvalidAction)")]
 fn test_constructor_invalid_return_type() {
-    let e = Env::default();
-    create_investment_contract(
-        &e,
-        500_u32,
-        7_u64,
-        7_u64,
-        1000000_i128,
-        0_u32,
-        4_u32,
-        100_i128,
-        true,
-    );
+    let env = Env::default();
+    create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 0_u32, 4_u32, 100_i128, true);
 }
 
-/// Ensures the constructor panics when `return_months` is 0.
 #[test]
 #[should_panic(expected = "Error(Context, InvalidAction)")]
 fn test_constructor_return_months_zero() {
-    let e = Env::default();
-    create_investment_contract(
-        &e,
-        500_u32,
-        7_u64,
-        7_u64,
-        1000000_i128,
-        1_u32,
-        0_u32,
-        100_i128,
-        true,
-    );
+    let env = Env::default();
+    create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 0_u32, 100_i128, true);
 }
 
-/// Ensures the constructor panics when `min_per_investment` is 0.
 #[test]
 #[should_panic(expected = "Error(Context, InvalidAction)")]
 fn test_constructor_min_investment_zero() {
-    let e = Env::default();
-    create_investment_contract(&e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 0_i128, true);
+    let env = Env::default();
+    create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 0_i128, true);
 }
 
-
-/// Verifies that `add_company_transfer` is rejected with `NextPaymentCannotBeScheduledYet` (#43)
-/// when called before `ts_payments_start` has been reached.
-/// With fundraising_days=7 and claim_block_days=7 payments start at day 14;
-/// advancing only to day 12 keeps the ledger before that threshold.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #43)")]
 fn test_call_add_company_transfer_before_ts_next_payment() {
-    let e = Env::default();
-    let test_data =
-        create_investment_contract(&e, 500_u32, 7_u64, 7_u64, 90000_i128, 2_u32, 4_u32, 100_i128, true);
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 90_000_i128, 2_u32, 4_u32, 100_i128, true);
 
-    test_data.token_admin.mint(&test_data.user, &1000000);
-    test_data.client.invest(&test_data.user, &1000);
+    test_data.token_admin.mint(&test_data.user, &1_000_000);
+    invest_as_operator(&test_data, &test_data.user, &1000);
 
     test_data.token_admin.mint(&test_data.project_address, &2000);
     test_data.token.transfer(&test_data.project_address, &test_data.admin, &2000);
 
-    e.ledger().set_timestamp(e.ledger().timestamp() + (12 * 86400));
-    test_data.client.add_company_transfer(&1000_i128);
+    env.ledger().set_timestamp(env.ledger().timestamp() + (12 * 86_400));
+    test_data.client.add_company_transfer(&1000_i128, &test_data.project_address);
 }
 
-/// Verifies that `process_investor_payment` is rejected with `PaymentAlreadyProcessedForThisPeriod` (#42)
-/// when called without a prior `add_company_transfer` for the current round.
-/// With no company transfer, `next_payment_round` stays at 0, which equals
-/// `investment.payments_transferred` (0), triggering the already-processed guard.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #42)")]
 fn test_call_process_investor_payment_without_previous_company_transfer() {
-    let e = Env::default();
-    let test_data =
-        create_investment_contract(&e, 500_u32, 7_u64, 7_u64, 90000_i128, 2_u32, 4_u32, 100_i128, true);
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 90_000_i128, 2_u32, 4_u32, 100_i128, true);
 
-    test_data.token_admin.mint(&test_data.user, &1000000);
-    let inv = test_data.client.invest(&test_data.user, &1000);
+    test_data.token_admin.mint(&test_data.user, &1_000_000);
+    let inv = invest_as_operator(&test_data, &test_data.user, &1000);
 
-    e.ledger().set_timestamp(e.ledger().timestamp() + (30 * 86400));
+    env.ledger().set_timestamp(env.ledger().timestamp() + (30 * 86_400));
     test_data.client.process_investor_payment(&inv.token_id);
-}   
+}
 
-/// Verifies that investing beyond the funding goal is rejected with error `#30`.
-/// The test fills the goal close to capacity and then performs one extra
-/// investment that pushes `received_so_far` over the configured goal.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #30)")]
 fn test_goal_reached() {
-    let e = Env::default();
-    let test_data =
-        create_investment_contract(&e, 500_u32, 7_u64, 7_u64, 90000_i128, 2_u32, 4_u32, 100_i128, true);
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 90_000_i128, 2_u32, 4_u32, 100_i128, true);
 
-    test_data.token_admin.mint(&test_data.user, &1000000);
-    test_data.client.invest(&test_data.user, &89000);
-    test_data.client.invest(&test_data.user, &2200);
-    test_data.client.invest(&test_data.user, &1600);
+    test_data.token_admin.mint(&test_data.user, &1_000_000);
+    invest_as_operator(&test_data, &test_data.user, &89_000);
+    invest_as_operator(&test_data, &test_data.user, &2200);
+    invest_as_operator(&test_data, &test_data.user, &1600);
 }
 
-/// Verifies that `invest` is rejected with `AddressInsufficientBalance` (#1)
-/// when the investor's token balance is lower than the requested investment amount.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #1)")]
 fn test_invest_insufficient_balance() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e,
-        500_u32,
-        7_u64,
-        7_u64,
-        1000000_i128,
-        1_u32,
-        4_u32,
-        100_i128,
-        true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
-    test_data.token_admin.mint(&test_data.user, &50000);
-    test_data.client.invest(&test_data.user, &100000);
+    test_data.token_admin.mint(&test_data.user, &50_000);
+    invest_as_operator(&test_data, &test_data.user, &100_000);
 }
 
-/// Verifies that `invest` is rejected with `AmountLessThanMinimum` (#5)
-/// when the amount is below the configured `min_per_investment`.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #5)")]
 fn test_invest_amount_less_than_minimum() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e,
-        500_u32,
-        7_u64,
-        7_u64,
-        1000000_i128,
-        1_u32,
-        4_u32,
-        100_i128,
-        true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
-    test_data.token_admin.mint(&test_data.user, &1000000);
-    test_data.client.invest(&test_data.user, &50);
+    test_data.token_admin.mint(&test_data.user, &1_000_000);
+    invest_as_operator(&test_data, &test_data.user, &50);
 }
 
-/// Verifies that `invest` is rejected with `FundrasingTimeExceeded` (#40)
-/// when the ledger timestamp has passed the fundraising deadline.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #40)")]
 fn test_invest_after_fundraising_period() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e,
-        500_u32,
-        7_u64,
-        7_u64,
-        1000000_i128,
-        1_u32,
-        4_u32,
-        100_i128,
-        true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
-    e.ledger().set_timestamp(8 * 86400);
-    test_data.token_admin.mint(&test_data.user, &1000000);
-    test_data.client.invest(&test_data.user, &1000);
+    env.ledger().set_timestamp(8 * 86_400);
+    test_data.token_admin.mint(&test_data.user, &1_000_000);
+    invest_as_operator(&test_data, &test_data.user, &1000);
 }
 
-
-/// Verifies that `add_company_transfer` is rejected with `ContractReserveInsufficientBalance` (#2)
-/// on the final payment round when the reserve is insufficient to cover the full Coupon payout.
-///
-/// For Coupon investments, the last round pays `amount_to_pay_per_month + deposited`
-/// (interest + full principal). `validate_company_transfer` detects the last round
-/// (`next_payment_round == return_months - 1`) and requires `reserve + amount >= payment_obligations`.
-///
-/// Setup: return_type=2 (Coupon), return_months=2, invest 1000 → reserve=50,
-/// amount_to_pay_per_month=24, payment_obligations=1019 (24+995). The admin receives only
-/// 10 tokens — enough to pass the non-final check on round 1 (`1 > 24 - 50`),
-/// but the final-round check fails on round 2 (`27 + 1 < 1019`).
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #2)")]
 fn test_add_company_transfer_insufficient_reserve_last_coupon_round() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e,
-        500_u32,
-        7_u64,
-        7_u64,
-        1000000_i128,
-        2_u32,
-        2_u32,
-        100_i128,
-        true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 2_u32, 2_u32, 100_i128, true);
 
     test_data.token_admin.mint(&test_data.user, &1000);
-    let inv = test_data.client.invest(&test_data.user, &1000);
+    let inv = invest_as_operator(&test_data, &test_data.user, &1000);
 
-    test_data.token_admin.mint(&test_data.admin, &10);
+    test_data.token_admin.mint(&test_data.project_address, &10);
 
-    e.ledger().set_timestamp(15 * 86400);
+    env.ledger().set_timestamp(15 * 86_400);
 
-    test_data.client.add_company_transfer(&1_i128);
+    test_data.client.add_company_transfer(&1_i128, &test_data.project_address);
     test_data.client.process_investor_payment(&inv.token_id);
 
-    test_data.client.add_company_transfer(&1_i128);
+    test_data.client.add_company_transfer(&1_i128, &test_data.project_address);
     test_data.client.process_investor_payment(&inv.token_id);
 }
 
-/// Verifies that `process_investor_payment` is rejected with `InvestmentCompleted` (#38)
-/// when called on an investment that has already received all its scheduled payments.
-/// Uses return_months=1 so a single company transfer and payment round fully completes
-/// the investment. Payments become available after `fundraising_days + claim_block_days` = 14 days.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #38)")]
 fn test_process_investor_payment_already_completed() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e,
-        500_u32,
-        7_u64,
-        7_u64,
-        1000000_i128,
-        1_u32,
-        1_u32,
-        100_i128,
-        true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 1_u32, 100_i128, true);
 
     test_data.token_admin.mint(&test_data.user, &1000);
-    let inv = test_data.client.invest(&test_data.user, &1000);
+    let inv = invest_as_operator(&test_data, &test_data.user, &1000);
 
     test_data.token_admin.mint(&test_data.project_address, &2000);
-    test_data.token.transfer(&test_data.project_address, &test_data.admin, &2000);
 
-    e.ledger().set_timestamp(15 * 86400);
-    test_data.client.add_company_transfer(&2000_i128);
+    env.ledger().set_timestamp(15 * 86_400);
+    test_data.client.add_company_transfer(&2000_i128, &test_data.project_address);
     test_data.client.process_investor_payment(&inv.token_id);
-
     test_data.client.process_investor_payment(&inv.token_id);
 }
 
-
-
-
-
-
-
-
-/// Verifies that `withdrawn` is rejected with `FundrasingTimeOngoingYet` (#39)
-/// when called before the fundraising deadline has passed.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #39)")]
 fn test_withdrawn_while_fundraising_ongoing() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e,
-        500_u32,
-        7_u64,
-        7_u64,
-        1000000_i128,
-        1_u32,
-        4_u32,
-        100_i128,
-        true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
     test_data.token_admin.mint(&test_data.user, &1000);
-    test_data.client.invest(&test_data.user, &1000);
+    invest_as_operator(&test_data, &test_data.user, &1000);
 
-    e.ledger().set_timestamp(3 * 86400);
-    test_data.client.withdrawn(&500_i128);
+    env.ledger().set_timestamp(3 * 86_400);
+    test_data.client.withdrawn(&500_i128, &test_data.project_address);
 }
 
-/// Verifies that `withdrawn` is rejected with `ContractInsufficientBalance` (#3)
-/// when the requested amount exceeds the available project balance.
-/// Investing 1000 with a 5% rate leaves a project balance of 945 (reserve=50, commission=5),
-/// so attempting to withdraw 946 must fail.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #3)")]
 fn test_withdrawn_insufficient_project_balance() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e,
-        500_u32,
-        7_u64,
-        7_u64,
-        1000000_i128,
-        1_u32,
-        4_u32,
-        100_i128,
-        true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
     test_data.token_admin.mint(&test_data.user, &1000);
-    test_data.client.invest(&test_data.user, &1000);
+    invest_as_operator(&test_data, &test_data.user, &1000);
 
-    e.ledger().set_timestamp(8 * 86400);
-    test_data.client.withdrawn(&946_i128);
+    env.ledger().set_timestamp(8 * 86_400);
+    test_data.client.withdrawn(&946_i128, &test_data.project_address);
 }
 
-
-
-
-
-
-
-
-/// Verifies that `add_company_transfer` is rejected with `OwnerInsufficientBalance` (#47)
-/// when the admin has no tokens to transfer.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #47)")]
 fn test_add_company_transfer_insufficient_balance() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e,
-        500_u32,
-        7_u64,
-        7_u64,
-        1000000_i128,
-        1_u32,
-        4_u32,
-        100_i128,
-        true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
-    e.ledger().set_timestamp(15 * 86400);
-    test_data.client.add_company_transfer(&100000_i128);
+    env.ledger().set_timestamp(15 * 86_400);
+    test_data.client.add_company_transfer(&100_000_i128, &test_data.project_address);
 }
 
-
-
-/// Verifies that `add_collateral` is rejected with `AddressInsufficientBalance` (#1)
-/// when the collateral provider has no balance in the collateral token.
-/// No mint is performed for `collateral_addr`, so the transfer must fail.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #1)")]
 fn test_add_collateral_insufficient_balance() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e,
-        500_u32,
-        7_u64,
-        7_u64,
-        1000000_i128,
-        1_u32,
-        4_u32,
-        100_i128,
-        true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
-    let collateral_addr = Address::generate(&e);
-    let (token_collateral, _token_collateral_admin)  = create_token_contract(&e, &test_data.admin);
-
-    test_data.client.add_collateral(
-        &token_collateral.address, 
-        &100_i128, 
-        &String::from_str(&e,"TEST"), 
-        &collateral_addr
-        
-    );
-}
-
-/// Verifies that `add_collateral` is rejected with `OnlyOneCollateralTokenAllowed` (#34)
-/// when attempting to register a second, different collateral token.
-#[test]
-#[should_panic(expected = "HostError: Error(Contract, #34)")]
-fn test_add_collateral_only_one_collateral_token_allowed() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e,
-        500_u32,
-        7_u64,
-        7_u64,
-        1000000_i128,
-        1_u32,
-        4_u32,
-        100_i128,
-        true
-    );
-
-    let collateral_addr = Address::generate(&e);
-    let (token_collateral, token_collateral_admin)  = create_token_contract(&e, &test_data.admin);
-    let (token_collateral_2, token_collateral_admin_2)  = create_token_contract(&e, &test_data.admin);
-    token_collateral_admin.mint(&collateral_addr, &200_i128);
-    token_collateral_admin_2.mint(&collateral_addr, &200_i128);
-    test_data.token_admin.mint(&test_data.user, &150_i128);
-    test_data.client.invest(&test_data.user, &150_i128);
-    test_data.client.add_collateral(
-        &token_collateral.address, 
-        &100_i128, 
-        &String::from_str(&e,"TEST"), 
-        &collateral_addr
-    );
-
-    test_data.client.add_collateral(
-        &token_collateral_2.address, 
-        &100_i128, 
-        &String::from_str(&e,"TEST2"), 
-        &collateral_addr
-    );
-
-
-}
-
-/// Verifies that `pay_with_collateral` is rejected with `CollateralNotConfigured` (#36)
-/// when no collateral configuration exists in storage.
-#[test]
-#[should_panic(expected = "HostError: Error(Contract, #36)")]
-fn test_pay_with_collateral_not_configured() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e,
-        500_u32,
-        7_u64,
-        7_u64,
-        1000000_i128,
-        1_u32,
-        4_u32,
-        100_i128,
-        true,
-    );
-
-    test_data.token_admin.mint(&test_data.user, &1000);
-    let inv = test_data.client.invest(&test_data.user, &1000);
-
-    test_data.client.pay_with_collateral(&inv.token_id);
-}
-
-/// Verifies that `return_collateral_to_company` is rejected with `CollateralBalanceIsEmpty` (#37)
-/// when collateral is configured but the contract no longer holds collateral tokens.
-/// A single investor receives all configured collateral via `pay_with_collateral`,
-/// leaving zero balance for the return path.
-#[test]
-#[should_panic(expected = "HostError: Error(Contract, #37)")]
-fn test_return_collateral_when_empty() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e,
-        500_u32,
-        7_u64,
-        7_u64,
-        1000000_i128,
-        1_u32,
-        4_u32,
-        100_i128,
-        true,
-    );
-
-    let collateral_addr = Address::generate(&e);
-    let (token_collateral, token_collateral_admin) = create_token_contract(&e, &test_data.admin);
-    token_collateral_admin.mint(&collateral_addr, &200_i128);
-
-    test_data.token_admin.mint(&test_data.user, &150_i128);
-    let inv = test_data.client.invest(&test_data.user, &150_i128);
+    let collateral_addr = Address::generate(&env);
+    let (token_collateral, _token_collateral_admin) = create_token_contract(&env, &test_data.admin);
+    test_data.client.grant_company(&collateral_addr);
 
     test_data.client.add_collateral(
         &token_collateral.address,
         &100_i128,
-        &String::from_str(&e, "TEST"),
+        &String::from_str(&env, "TEST"),
+        &collateral_addr,
+    );
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #2000)")]
+fn test_add_collateral_without_company_role() {
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
+
+    let collateral_addr = Address::generate(&env);
+    let (token_collateral, token_collateral_admin) = create_token_contract(&env, &test_data.admin);
+    token_collateral_admin.mint(&collateral_addr, &200_i128);
+
+    test_data.client.add_collateral(
+        &token_collateral.address,
+        &100_i128,
+        &String::from_str(&env, "TEST"),
+        &collateral_addr,
+    );
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #34)")]
+fn test_add_collateral_only_one_collateral_token_allowed() {
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
+
+    let collateral_addr = Address::generate(&env);
+    let (token_collateral, token_collateral_admin) = create_token_contract(&env, &test_data.admin);
+    let (token_collateral_2, token_collateral_admin_2) = create_token_contract(&env, &test_data.admin);
+    test_data.client.grant_company(&collateral_addr);
+    token_collateral_admin.mint(&collateral_addr, &200_i128);
+    token_collateral_admin_2.mint(&collateral_addr, &200_i128);
+    test_data.token_admin.mint(&test_data.user, &150_i128);
+    invest_as_operator(&test_data, &test_data.user, &150_i128);
+    test_data.client.add_collateral(
+        &token_collateral.address,
+        &100_i128,
+        &String::from_str(&env, "TEST"),
+        &collateral_addr,
+    );
+
+    test_data.client.add_collateral(
+        &token_collateral_2.address,
+        &100_i128,
+        &String::from_str(&env, "TEST2"),
+        &collateral_addr,
+    );
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #36)")]
+fn test_pay_with_collateral_not_configured() {
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
+
+    test_data.token_admin.mint(&test_data.user, &1000);
+    let inv = invest_as_operator(&test_data, &test_data.user, &1000);
+
+    test_data.client.pay_with_collateral(&inv.token_id);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #37)")]
+fn test_return_collateral_when_empty() {
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
+
+    let collateral_addr = Address::generate(&env);
+    let (token_collateral, token_collateral_admin) = create_token_contract(&env, &test_data.admin);
+    test_data.client.grant_company(&collateral_addr);
+    token_collateral_admin.mint(&collateral_addr, &200_i128);
+
+    test_data.token_admin.mint(&test_data.user, &150_i128);
+    let inv = invest_as_operator(&test_data, &test_data.user, &150_i128);
+
+    test_data.client.add_collateral(
+        &token_collateral.address,
+        &100_i128,
+        &String::from_str(&env, "TEST"),
         &collateral_addr,
     );
 
@@ -489,191 +291,197 @@ fn test_return_collateral_when_empty() {
     test_data.client.return_collateral_to_company();
 }
 
-
-/// Verifies that `refund_investor` is rejected with `AddressHasNotInvested` (#14)
-/// when the given `token_id` does not correspond to any investment.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #14)")]
 fn test_refund_investor_address_has_not_invested() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
     test_data.client.refund_investor(&999_u32);
 }
 
-/// Verifies that `refund_investor` is rejected with `FundrasingTimeExceeded` (#40)
-/// when called after `ts_fundraising_ends`.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #40)")]
 fn test_refund_investor_fundraising_ended() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
-    let u: Address = Address::generate(&e);
-    test_data.token_admin.mint(&u, &1000);
-    let inv = test_data.client.invest(&u, &1000);
+    let user = Address::generate(&env);
+    test_data.token_admin.mint(&user, &1000);
+    let inv = invest_as_operator(&test_data, &user, &1000);
 
-    e.ledger().set_timestamp(8 * 86400);
+    env.ledger().set_timestamp(8 * 86_400);
 
     test_data.client.refund_investor(&inv.token_id);
 }
 
-/// Verifies that `refund_investor` is rejected with `InvestmentCompleted` (#38)
-/// when called a second time on an already-refunded investment.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #38)")]
 fn test_refund_investor_already_refunded() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
-    let u: Address = Address::generate(&e);
-    test_data.token_admin.mint(&u, &1000);
-    let inv = test_data.client.invest(&u, &1000);
+    let user = Address::generate(&env);
+    test_data.token_admin.mint(&user, &1000);
+    let inv = invest_as_operator(&test_data, &user, &1000);
 
-    e.ledger().set_timestamp(3 * 86400);
+    env.ledger().set_timestamp(3 * 86_400);
 
     test_data.client.refund_investor(&inv.token_id);
     test_data.client.refund_investor(&inv.token_id);
 }
 
-
-/// Verifies that `withdrawn_commissions` is rejected with `FundrasingTimeOngoingYet` (#39)
-/// when called before the fundraising deadline has passed.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #39)")]
 fn test_withdrawn_commissions_while_fundraising_ongoing() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
-    let u: Address = Address::generate(&e);
-    test_data.token_admin.mint(&u, &1000);
-    test_data.client.invest(&u, &1000);
+    let user = Address::generate(&env);
+    test_data.token_admin.mint(&user, &1000);
+    invest_as_operator(&test_data, &user, &1000);
 
-    e.ledger().set_timestamp(3 * 86400);
-    test_data.client.withdrawn_commissions();
+    env.ledger().set_timestamp(3 * 86_400);
+    test_data.client.withdrawn_commissions(&test_data.project_address);
 }
 
-/// Verifies that `withdrawn_commissions` is rejected with `ContractInsufficientBalance` (#3)
-/// when there is no pending commission to withdraw (no investments made).
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #3)")]
 fn test_withdrawn_commissions_no_available_commission() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
-    e.ledger().set_timestamp(8 * 86400);
-    test_data.client.withdrawn_commissions();
+    env.ledger().set_timestamp(8 * 86_400);
+    test_data.client.withdrawn_commissions(&test_data.project_address);
 }
 
-/// Verifies that a second call to `withdrawn_commissions` is rejected with
-/// `ContractInsufficientBalance` (#3) once all accumulated commission has
-/// already been withdrawn.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #3)")]
 fn test_withdrawn_commissions_already_fully_withdrawn() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
-    let u: Address = Address::generate(&e);
-    test_data.token_admin.mint(&u, &1000);
-    test_data.client.invest(&u, &1000);
+    let user = Address::generate(&env);
+    test_data.token_admin.mint(&user, &1000);
+    invest_as_operator(&test_data, &user, &1000);
 
-    e.ledger().set_timestamp(8 * 86400);
-    test_data.client.withdrawn_commissions();
-
-    test_data.client.withdrawn_commissions();
+    env.ledger().set_timestamp(8 * 86_400);
+    test_data.client.withdrawn_commissions(&test_data.project_address);
+    test_data.client.withdrawn_commissions(&test_data.project_address);
 }
 
-
-/// Verifies that `emergency_pay_investor` is rejected with `AddressHasNotInvested` (#14)
-/// when the given `token_id` does not correspond to any investment.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #14)")]
 fn test_emergency_pay_investor_address_has_not_invested() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
-    e.ledger().set_timestamp(8 * 86400);
+    env.ledger().set_timestamp(8 * 86_400);
     test_data.client.emergency_pay_investor(&999_u32);
 }
 
-/// Verifies that `emergency_pay_investor` is rejected with `FundrasingTimeOngoingYet` (#39)
-/// when called before the fundraising period has ended.
-/// Emergency payouts are only enabled after fundraising closes.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #39)")]
 fn test_emergency_pay_investor_fundraising_ongoing() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
-    let u: Address = Address::generate(&e);
-    test_data.token_admin.mint(&u, &1000);
-    let inv = test_data.client.invest(&u, &1000);
+    let user = Address::generate(&env);
+    test_data.token_admin.mint(&user, &1000);
+    let inv = invest_as_operator(&test_data, &user, &1000);
 
-    e.ledger().set_timestamp(3 * 86400);
+    env.ledger().set_timestamp(3 * 86_400);
     test_data.client.emergency_pay_investor(&inv.token_id);
 }
 
-/// Verifies that `emergency_pay_investor` is rejected with `InvestmentCompleted` (#38)
-/// when called on an investment that has already been processed.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #38)")]
 fn test_emergency_pay_investor_already_completed() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true,
-    );
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
 
-    let u: Address = Address::generate(&e);
-    test_data.token_admin.mint(&u, &1000);
-    let inv = test_data.client.invest(&u, &1000);
+    let user = Address::generate(&env);
+    test_data.token_admin.mint(&user, &1000);
+    let inv = invest_as_operator(&test_data, &user, &1000);
 
-    e.ledger().set_timestamp(8 * 86400);
+    env.ledger().set_timestamp(8 * 86_400);
+    test_data.client.withdrawn_commissions(&test_data.project_address);
+    test_data.client.activate_emergency_close();
     test_data.client.emergency_pay_investor(&inv.token_id);
     test_data.client.emergency_pay_investor(&inv.token_id);
 }
 
-/// Verifies that `emergency_pay_investor` is rejected with `EmptyReserve` (#44)
-/// when reserve is fully drained by a prior normal payment.
-///
-/// Setup: a 2-round ReverseLoan where round 1 is funded exactly to pay once.
-/// After processing round 1, reserve becomes zero while the investment remains
-/// incomplete, so the emergency path must fail with `EmptyReserve`.
 #[test]
-#[should_panic(expected = "HostError: Error(Contract, #44)")]
-fn test_emergency_pay_investor_empty_reserve() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 2_u32, 100_i128, true,
-    );
+#[should_panic(expected = "HostError: Error(Contract, #49)")]
+fn test_emergency_pay_investor_without_activation() {
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 2_u32, 100_i128, true);
 
-    let u = Address::generate(&e);
-    test_data.token_admin.mint(&u, &1000);
-    let inv = test_data.client.invest(&u, &1000);
-
-    test_data.token_admin.mint(&test_data.project_address, &472);
-    test_data.token.transfer(&test_data.project_address, &test_data.admin, &472);
-
-    e.ledger().set_timestamp(15 * 86400);
-
-    test_data.client.add_company_transfer(&472);
-    test_data.client.process_investor_payment(&inv.token_id);
+    let user = Address::generate(&env);
+    test_data.token_admin.mint(&user, &1000);
+    let inv = invest_as_operator(&test_data, &user, &1000);
+    env.ledger().set_timestamp(8 * 86_400);
 
     test_data.client.emergency_pay_investor(&inv.token_id);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #51)")]
+fn test_activate_emergency_close_with_pending_commission() {
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
+
+    let user = Address::generate(&env);
+    test_data.token_admin.mint(&user, &1000);
+    invest_as_operator(&test_data, &user, &1000);
+
+    env.ledger().set_timestamp(8 * 86_400);
+    test_data.client.activate_emergency_close();
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #52)")]
+fn test_activate_emergency_close_with_empty_pool() {
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
+
+    env.ledger().set_timestamp(8 * 86_400);
+    test_data.client.activate_emergency_close();
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #50)")]
+fn test_add_company_transfer_blocked_in_emergency() {
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
+
+    let user = Address::generate(&env);
+    test_data.token_admin.mint(&user, &1000);
+    invest_as_operator(&test_data, &user, &1000);
+    test_data.token_admin.mint(&test_data.admin, &1000);
+
+    env.ledger().set_timestamp(8 * 86_400);
+    test_data.client.withdrawn_commissions(&test_data.project_address);
+    test_data.client.activate_emergency_close();
+    test_data.client.add_company_transfer(&100_i128, &test_data.project_address);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #50)")]
+fn test_invest_blocked_in_emergency() {
+    let env = Env::default();
+    let test_data = create_investment_contract(&env, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true);
+
+    let first_investor = Address::generate(&env);
+    let late_investor = Address::generate(&env);
+    test_data.token_admin.mint(&first_investor, &1000);
+    test_data.token_admin.mint(&late_investor, &1000);
+
+    invest_as_operator(&test_data, &first_investor, &1000);
+
+    env.ledger().set_timestamp(8 * 86_400);
+    test_data.client.withdrawn_commissions(&test_data.project_address);
+    test_data.client.activate_emergency_close();
+
+    invest_as_operator(&test_data, &late_investor, &1000);
 }
