@@ -1,7 +1,134 @@
-use soroban_sdk::{contracttype, Address, Env};
+use soroban_sdk::{contracttype, contracterror, Address, Env};
 
 use crate::constants::SECONDS_IN_DAY;
-use crate::investment::InvestmentReturnType;
+
+/// Aggregated accounting snapshot for contract-level financial state.
+///
+/// Fields track reserves, project funds, commissions, obligations, and
+/// collateral/emergency/refund side effects over time.
+#[contracttype]
+pub struct ContractBalance {
+    pub reserve: i128,
+    pub project: i128,
+    pub comission: i128,
+    pub comission_withdrawal: i128,
+    pub payments: i128,
+    pub project_withdrawals: i128,
+    pub payment_obligations: i128,
+    pub collateral_received: i128,
+    pub collateral_liquidated: i128,
+    pub collateral_returned: i128,
+    pub refunded_to_investor: i128,
+}
+
+impl Default for ContractBalance {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+
+
+impl ContractBalance {
+    /// Creates a zero-initialized balance snapshot.
+    pub fn new() -> Self {
+        Self {
+            reserve: 0,
+            project: 0,
+            comission: 0,
+            comission_withdrawal: 0,
+            payments: 0,
+            project_withdrawals: 0,
+            payment_obligations: 0,
+            collateral_received: 0,
+            collateral_liquidated: 0,
+            collateral_returned: 0,
+            refunded_to_investor: 0,
+        }
+    }
+
+    /// Applies accounting effects of a newly accepted investment.
+    pub fn recalculate_from_position(
+        &mut self,
+        position: &Position,
+    ) {
+        self.comission += position.commission;
+        self.project += position.deposited;
+        self.payment_obligations += position.total
+    }
+
+    /// Applies accounting effects of a regular investor payment.
+    pub fn recalculate_from_payment_to_investor(&mut self, amount: &i128) {
+        self.reserve -= amount;
+        self.payments += amount;
+        self.payment_obligations -= amount;
+    }
+
+    /// Applies accounting effects of a company transfer into reserve.
+    pub fn recalculate_from_company_contribution(&mut self, amount: &i128) {
+        self.reserve += amount;
+    }
+
+    /// Applies accounting effects of withdrawing project funds.
+    pub fn recalculate_from_company_withdrawal(&mut self, amount: &i128) {
+        self.project -= amount;
+        self.project_withdrawals += amount;
+    }
+
+    /// Applies accounting effects of commission withdrawal.
+    pub fn recalculate_from_comission_withdrawal(&mut self, amount: &i128) {
+        self.comission_withdrawal += amount;
+    }
+
+    /// Applies accounting effects of collateral deposit reception.
+    pub fn recalculate_from_collateral_received(&mut self, amount: &i128) {
+        self.collateral_received += amount;
+    }
+
+    /// Applies accounting effects when collateral is liquidated for a position.
+    pub fn recalculate_from_collateral_liquidated(
+        &mut self,
+        collateral_amount: &i128,
+        remaining_obligations: &i128,
+    ) {
+        self.collateral_liquidated += collateral_amount;
+        self.payment_obligations -= remaining_obligations;
+    }
+
+    /// Applies accounting effects when collateral is returned to provider.
+    pub fn recalculate_from_collateral_returned(&mut self, amount: &i128) {
+        self.collateral_returned += amount;
+    }
+
+    /// Applies accounting effects of one emergency payout.
+    ///
+    /// Payouts consume reserve first, then project balance for the remainder.
+    pub fn recalculate_from_emergency_payment(
+        &mut self,
+        amount: &i128,
+        remaining_obligations: &i128,
+    ) {
+        let reserve_to_use = if self.reserve >= *amount {
+            *amount
+        } else {
+            self.reserve
+        };
+        let project_to_use = *amount - reserve_to_use;
+
+        self.reserve -= reserve_to_use;
+        self.project -= project_to_use;
+        self.payments += amount;
+        self.payment_obligations -= remaining_obligations;
+    }
+
+    /// Applies accounting effects of investor refund.
+    pub fn recalculate_from_refunded_to_investor(&mut self, position: &Position) {
+        self.project -= position.deposited;
+        self.comission -= position.commission;
+        self.refunded_to_investor += position.deposited + position.commission;
+        self.payment_obligations -= position.total - position.paid;
+    }
+}
 
 /// Constructor parameters supplied at deployment.
 #[contracttype]
@@ -13,6 +140,9 @@ pub struct InvestmentContractParams {
     pub return_type: u32,
     pub return_months: u32,
     pub min_per_investment: i128,
+    pub cmr_upper_divisor: u32,
+    pub cmr_lower_divisor: u32,
+    pub cmr_reductor: i128
 }
 
 /// Persisted immutable/semi-immutable configuration used across business flows.
@@ -25,11 +155,14 @@ pub struct ContractData {
     pub ts_payments_start: u64,
     pub token: Address,
     pub price_oracle: Address,
-    pub return_type: InvestmentReturnType,
+    pub return_type: PositionReturnType,
     pub return_months: u32,
     pub min_per_investment: i128,
     pub goal: i128,
     pub amount_to_pay_per_month: i128,
+    pub cmr_upper_divisor: u32,
+    pub cmr_lower_divisor: u32,
+    pub cmr_reductor: i128
 }
 
 impl ContractData {
@@ -54,14 +187,56 @@ impl ContractData {
             ts_payments_start,
             token,
             price_oracle,
-            return_type: InvestmentReturnType::from_number(params.return_type).unwrap(),
+            return_type: PositionReturnType::from_number(params.return_type).unwrap(),
             return_months: params.return_months,
             min_per_investment: params.min_per_investment,
             goal: params.goal,
             amount_to_pay_per_month: 0,
+            cmr_upper_divisor: params.cmr_upper_divisor,
+            cmr_lower_divisor: params.cmr_lower_divisor,
+            cmr_reductor: params.cmr_reductor
         }
     }
 }
+
+#[contracttype]
+#[derive(Copy, Clone)]
+pub struct Position {
+    pub deposited: i128,
+    pub commission: i128,
+    pub returns: i128,
+    pub total: i128,
+    pub completed: bool,
+    pub regular_payment: i128,
+    pub paid: i128,
+    pub payments_transferred: u32,
+    pub token_id: u32,
+}
+
+#[derive(Copy, Clone, PartialEq)]
+#[repr(u32)]
+#[contracttype]
+/// Repayment profile used by investment positions.
+pub enum PositionReturnType {
+    ReverseLoan = 1,
+    Coupon = 2,
+}
+
+impl PositionReturnType {
+    /// Parses numeric return type code into enum variant.
+    pub fn from_number<N>(value: N) -> Option<Self>
+    where
+        N: Into<u32>,
+    {
+        match value.into() {
+            1 => Some(Self::ReverseLoan),
+            2 => Some(Self::Coupon),
+            _ => None,
+        }
+    }
+}
+
+
 
 #[derive(Clone)]
 #[contracttype]
@@ -70,7 +245,62 @@ pub enum DataKey {
     ContractData,
     NextPaymentRound,
     Investment(u32),
+    Position(u32),
     ContractBalances,
     EmergencyCloseState,
     Collateral,
+    PositionIdAddress(u32),
+    LiquidateInvestmentEnabled
+}
+
+#[derive(Clone, PartialEq)]
+#[contracttype]
+pub enum LiquidateInvestmentsStatus {
+    Enabled,
+    Disabled
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+#[contracterror]
+/// Canonical business error codes returned by the contract.
+///
+/// Values are stable numeric discriminants used by tests and integrations.
+pub enum Error {
+    AddressInsufficientBalance = 1,
+    ContractReserveInsufficientBalance = 2,
+    ContractInsufficientBalance = 3,
+    AmountLessThanMinimum = 5,
+    InterestRateMustBeGreaterThanZero = 6,
+    GoalMustBeGreaterThanZero = 7,
+    UnsupportedReturnType = 8,
+    ReturnMonthsMustBeGreaterThanZero = 9,
+    MinPerInvestmentMustBeGreaterThanZero = 10,
+    CmrUpperDividorMustBeGreaterThanZero = 11,
+    CmrLowerDividorMustBeGreaterThanZero = 12,
+    CmrReductorMustBeGreaterThanZero = 13,
+    AddressHasNotInvested = 14,
+    CmrUpperDivisorMustBeGreaterTheCmrLowerDivisor = 15,
+    RecipientCannotReceivePayment = 28,
+    InvalidPaymentData = 29,
+    GoalReached = 30,
+    CollateralLevelTooLow = 33,
+    OnlyOneCollateralTokenAllowed = 34,
+    CollateralNotConfigured = 36,
+    CollateralBalanceIsEmpty = 37,
+    PositionCompleted = 38,
+    FundrasingTimeOngoingYet = 39,
+    FundrasingTimeExceeded = 40,
+    PaymentAlreadyProcessedForThisPeriod = 42,
+    NextPaymentCannotBeScheduledYet = 43,
+    EmptyPaymentObligations = 45,
+    EmptyRefundAmount = 46,
+    OwnerInsufficientBalance = 47,
+    EmergencyAlreadyActive = 48,
+    EmergencyNotActive = 49,
+    OperationNotAllowedInEmergency = 50,
+    PendingCommissionWithdrawal = 51,
+    EmptyEmergencyPool = 52,
+    PositionIdAlreadyExists = 53,
+    LiquidationPaymentsOutOfPeriod = 54
 }

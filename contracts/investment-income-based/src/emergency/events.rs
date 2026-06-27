@@ -2,7 +2,7 @@ use soroban_sdk::{contractevent, Address, Env};
 
 /// Emitted when one investor receives emergency-close payout.
 #[contractevent]
-pub struct EmergencyPaymentSent {
+pub(super) struct EmergencyPaymentSent {
     #[topic]
     pub addr: Address,
     pub to: Address,
@@ -11,7 +11,7 @@ pub struct EmergencyPaymentSent {
 
 /// Emitted when emergency-close mode becomes active.
 #[contractevent]
-pub struct EmergencyCloseActivated {
+pub(super) struct EmergencyCloseActivated {
     #[topic]
     pub addr: Address,
     pub emergency_pool_total: i128,
@@ -19,7 +19,7 @@ pub struct EmergencyCloseActivated {
 }
 
 /// Publishes emergency investor payment event.
-pub fn emit_emergency_payment_sent(env: &Env, to: Address, total_sent: i128) {
+pub(super) fn emit_emergency_payment_sent(env: &Env, to: Address, total_sent: i128) {
     EmergencyPaymentSent {
         addr: env.current_contract_address(),
         to,
@@ -29,7 +29,7 @@ pub fn emit_emergency_payment_sent(env: &Env, to: Address, total_sent: i128) {
 }
 
 /// Publishes emergency-close activation event.
-pub fn emit_emergency_close_activated(
+pub(super) fn emit_emergency_close_activated(
     env: &Env,
     emergency_pool_total: i128,
     emergency_obligations_total: i128,

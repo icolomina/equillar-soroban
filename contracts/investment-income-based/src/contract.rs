@@ -1,17 +1,23 @@
-use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol};
-use stellar_contract_utils::pausable::{self as pausable, Pausable};
-use stellar_macros::{has_role, only_admin, only_role, when_not_paused};
-use stellar_tokens::non_fungible::Base;
+use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol};
 use stellar_access::access_control::{self as access_control};
+use stellar_contract_utils::pausable::{self as pausable, Pausable};
+use stellar_macros::{has_role, only_admin, only_role, when_not_paused, when_paused};
 
-use crate::collateral::{self, Collateral};
+use crate::collateral;
 use crate::emergency;
-use crate::interface::InvestmentContractInterface;
-use crate::investment::{self, Investment, InvestmentReturnType};
+use crate::investment;
 use crate::payments;
-use crate::shared::{self, ContractBalance, InvestmentContractParams};
+use crate::require;
+
+use crate::shared::types::PositionReturnType;
+use crate::shared::{
+    self,
+    types::{
+        ContractBalance, ContractData, Error, InvestmentContractParams, LiquidateInvestmentsStatus,
+        Position,
+    },
+};
 use crate::treasury;
-use crate::validation::{self, Error};
 
 #[contract]
 pub struct InvestmentContract;
@@ -36,7 +42,7 @@ fn admin(env: &Env) -> Address {
 fn require_admin_or_any_role(env: &Env, caller: &Address) {
     let is_admin = *caller == admin(&env);
 
-    if is_admin  {
+    if is_admin {
         caller.require_auth();
         return;
     }
@@ -51,7 +57,35 @@ fn require_admin_or_any_role(env: &Env, caller: &Address) {
     panic!("Caller is not admin or any role");
 }
 
-
+fn validate_constructor_params(
+    i_rate: u32,
+    goal: i128,
+    return_months: u32,
+    min_per_investment: i128,
+    cmr_upper_divisor: u32,
+    cmr_lower_divisor: u32,
+    cmr_reductor: i128,
+) -> Result<(), Error> {
+    require!(
+        i_rate > 0,
+        Error::InterestRateMustBeGreaterThanZero,
+        goal > 0,
+        Error::GoalMustBeGreaterThanZero,
+        return_months > 0,
+        Error::ReturnMonthsMustBeGreaterThanZero,
+        min_per_investment > 0,
+        Error::MinPerInvestmentMustBeGreaterThanZero,
+        cmr_upper_divisor > 0,
+        Error::CmrUpperDividorMustBeGreaterThanZero,
+        cmr_lower_divisor > 0,
+        Error::CmrLowerDividorMustBeGreaterThanZero,
+        cmr_reductor > 0,
+        Error::CmrReductorMustBeGreaterThanZero,
+        cmr_upper_divisor > cmr_lower_divisor,
+        Error::CmrUpperDivisorMustBeGreaterTheCmrLowerDivisor
+    );
+    Ok(())
+}
 
 // Public Soroban entrypoints exported by the contract.
 #[contractimpl]
@@ -68,36 +102,34 @@ impl InvestmentContract {
         admin_addr: Address,
         token_addr: Address,
         price_oracle: Address,
-        uri: String,
-        name: String,
-        symbol: String,
         investment_params: InvestmentContractParams,
     ) -> Result<(), Error> {
         admin_addr.require_auth();
-        validation::validate_constructor_params(
+        validate_constructor_params(
             investment_params.i_rate,
             investment_params.goal,
             investment_params.return_months,
             investment_params.min_per_investment,
+            investment_params.cmr_upper_divisor,
+            investment_params.cmr_lower_divisor,
+            investment_params.cmr_reductor,
         )?;
-        InvestmentReturnType::from_number(investment_params.return_type)
+        PositionReturnType::from_number(investment_params.return_type)
             .ok_or(Error::UnsupportedReturnType)?;
 
         access_control::set_admin(&env, &admin_addr);
 
-        let contract_data = shared::ContractData::from_investment_contract_params(
+        let contract_data = ContractData::from_investment_contract_params(
             &env,
             &investment_params,
             token_addr,
             price_oracle,
         );
 
-        Base::set_metadata(&env, uri, name, symbol.clone());
         shared::storage::update_contract_data(&env, &contract_data);
         shared::events::emit_contract_deployed_event(
             &env,
             env.current_contract_address(),
-            symbol,
             contract_data.ts_fundraising_ends,
             contract_data.ts_payments_start,
         );
@@ -115,8 +147,48 @@ impl InvestmentContract {
     /// Propagates investment validation and transfer errors.
     #[when_not_paused]
     #[only_role(addr, "operator")]
-    pub fn invest(env: Env, addr: Address, amount: i128) -> Result<Investment, Error> {
-        investment::invest(&env, &addr, amount)
+    pub fn invest(env: Env, addr: Address, amount: i128, token_id: u32) -> Result<Position, Error> {
+        investment::invest(&env, &addr, amount, token_id)
+    }
+
+    /// Enable liquidation payments. It means positions will be liquidated within the contract foreach
+    /// payment round
+    ///
+    /// # Access Control
+    /// - Admin only.
+    ///
+    /// # Errors
+    /// Propagates period validations (only within the block period)
+    #[only_admin]
+    pub fn enable_investment_liquidations(env: Env) -> Result<(), Error> {
+        payments::enable_liquidate_investments(&env)
+    }
+
+    /// Disable liquidation payments. It means positions won't be liquidated within the contract foreach
+    /// payment round
+    ///
+    /// # Access Control
+    /// - Admin only.
+    ///
+    /// # Errors
+    /// Propagates period validations (only within the block period)
+    #[only_admin]
+    pub fn disable_investment_liquidations(env: Env) -> Result<(), Error> {
+        payments::disable_liquidate_investments(&env)
+    }
+
+    /// Check liquidation payments status
+    /// payment round
+    ///
+    /// # Access Control
+    /// - Admin only.
+    ///
+    pub fn check_investment_liquidations(
+        env: Env,
+        caller: Address,
+    ) -> Result<LiquidateInvestmentsStatus, Error> {
+        require_admin_or_any_role(&env, &caller);
+        payments::check_investment_liquidations(&env)
     }
 
     /// Processes one scheduled payment for the investment identified by `token_id`.
@@ -126,7 +198,7 @@ impl InvestmentContract {
     /// - Admin only.
     #[when_not_paused]
     #[only_admin]
-    pub fn process_investor_payment(env: Env, token_id: u32) -> Result<Investment, Error> {
+    pub fn process_investor_payment(env: Env, token_id: u32) -> Result<Position, Error> {
         payments::process_investor_payment(&env, token_id)
     }
 
@@ -285,7 +357,7 @@ impl InvestmentContract {
     #[only_admin]
     #[has_role(from, "company")]
     pub fn add_company_transfer(env: Env, amount: i128, from: Address) -> Result<bool, Error> {
-        treasury::add_company_transfer(&env, from, amount)
+        payments::add_company_transfer(&env, from, amount)
     }
 
     /// Freezes contract into emergency mode and snapshots distributable pool.
@@ -325,7 +397,7 @@ impl InvestmentContract {
         collateral_token_amount: i128,
         collateral_token_symbol: String,
         collateral_addr: Address,
-    ) -> Result<Collateral, Error> {
+    ) -> Result<u32, Error> {
         collateral::add_collateral(
             &env,
             collateral_token_addr,
@@ -365,12 +437,21 @@ impl InvestmentContract {
         require_admin_or_any_role(env, &caller);
         pausable::paused(env)
     }
+
+    /// Upgrades the contract code (with new features) without changing the address
+    ///
+    /// # Access Control
+    /// Caller must be admin and contract must be paused
+    #[only_admin]
+    #[when_paused]
+    pub fn upgrade(env: &Env, new_wasm_hash: BytesN<32>) {
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
 }
 
 // Pausable extension entrypoints exposed by the contract.
 #[contractimpl]
 impl Pausable for InvestmentContract {
-
     /// Pauses guarded operations.
     ///
     /// # Access Control
@@ -387,134 +468,5 @@ impl Pausable for InvestmentContract {
     #[only_admin]
     fn unpause(env: &Env, _caller: Address) {
         pausable::unpause(env);
-    }
-}
-
-// Rust-side interface conformance for the public contract API.
-impl InvestmentContractInterface for InvestmentContract {
-    fn __constructor(
-        env: Env,
-        owner_addr: Address,
-        token_addr: Address,
-        price_oracle: Address,
-        uri: String,
-        name: String,
-        symbol: String,
-        investment_params: InvestmentContractParams,
-    ) -> Result<(), Error> {
-        InvestmentContract::__constructor(
-            env,
-            owner_addr,
-            token_addr,
-            price_oracle,
-            uri,
-            name,
-            symbol,
-            investment_params,
-        )
-    }
-
-    fn invest(env: Env, addr: Address, amount: i128) -> Result<Investment, Error> {
-        InvestmentContract::invest(env, addr, amount)
-    }
-
-    fn process_investor_payment(env: Env, token_id: u32) -> Result<Investment, Error> {
-        InvestmentContract::process_investor_payment(env, token_id)
-    }
-
-    fn refund_investor(env: Env, token_id: u32) -> Result<i128, Error> {
-        InvestmentContract::refund_investor(env, token_id)
-    }
-
-    fn get_contract_balance(env: Env, caller: Address) -> Result<ContractBalance, Error> {
-        InvestmentContract::get_contract_balance(env, caller)
-    }
-
-    fn grant_operator(env: Env, operator: Address) -> Result<(), Error> {
-        InvestmentContract::grant_operator(env, operator)
-    }
-
-    fn revoke_operator(env: Env, operator: Address) -> Result<(), Error> {
-        InvestmentContract::revoke_operator(env, operator)
-    }
-
-    fn grant_company(env: Env, company: Address) -> Result<(), Error> {
-        InvestmentContract::grant_company(env, company)
-    }
-
-    fn revoke_company(env: Env, company: Address) -> Result<(), Error> {
-        InvestmentContract::revoke_company(env, company)
-    }
-
-    fn grant_manager(env: Env, manager: Address) -> Result<(), Error> {
-        InvestmentContract::grant_manager(env, manager)
-    }
-
-    fn revoke_manager(env: Env, manager: Address) -> Result<(), Error> {
-        InvestmentContract::revoke_manager(env, manager)
-    }
-
-    fn transfer_admin_role(env: Env, new_admin: Address) -> Result<(), Error> {
-        InvestmentContract::transfer_admin_role(env, new_admin)
-    }
-
-    fn accept_admin_transfer_role(env: Env) -> Result<(), Error> {
-        InvestmentContract::accept_admin_transfer_role(env)
-    }
-
-    fn withdrawn(env: Env, amount: i128, to: Address) -> Result<(), Error> {
-        InvestmentContract::withdrawn(env, amount, to)
-    }
-
-    fn withdrawn_commissions(env: Env, to: Address) -> Result<i128, Error> {
-        InvestmentContract::withdrawn_commissions(env, to)
-    }
-
-    fn add_company_transfer(env: Env, amount: i128, from: Address) -> Result<bool, Error> {
-        InvestmentContract::add_company_transfer(env, amount, from)
-    }
-
-    fn activate_emergency_close(env: Env) -> Result<bool, Error> {
-        InvestmentContract::activate_emergency_close(env)
-    }
-
-    fn emergency_pay_investor(env: Env, token_id: u32) -> Result<i128, Error> {
-        InvestmentContract::emergency_pay_investor(env, token_id)
-    }
-
-    fn add_collateral(
-        env: Env,
-        collateral_token_addr: Address,
-        collateral_token_amount: i128,
-        collateral_token_symbol: String,
-        collateral_addr: Address,
-    ) -> Result<Collateral, Error> {
-        InvestmentContract::add_collateral(
-            env,
-            collateral_token_addr,
-            collateral_token_amount,
-            collateral_token_symbol,
-            collateral_addr,
-        )
-    }
-
-    fn pay_with_collateral(env: Env, token_id: u32) -> Result<i128, Error> {
-        InvestmentContract::pay_with_collateral(env, token_id)
-    }
-
-    fn return_collateral_to_company(env: Env) -> Result<i128, Error> {
-        InvestmentContract::return_collateral_to_company(env)
-    }
-
-    fn paused(env: Env, caller: Address) -> bool {
-        InvestmentContract::paused(&env, caller)
-    }
-
-    fn pause(env: Env, caller: Address) {
-        <InvestmentContract as Pausable>::pause(&env, caller)
-    }
-
-    fn unpause(env: Env, caller: Address) {
-        <InvestmentContract as Pausable>::unpause(&env, caller)
     }
 }

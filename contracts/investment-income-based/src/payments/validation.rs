@@ -2,36 +2,24 @@ use soroban_sdk::token::TokenClient;
 use soroban_sdk::{Address, Env};
 
 use crate::require;
-use crate::shared::{ContractBalance, ContractData};
-use crate::validation::Error;
+use crate::shared::types::{ContractBalance, ContractData};
+use crate::shared::types::{Error, Position};
 
-/// Validates project withdrawal timing and available project balance.
-pub fn validate_withdrawal(
-    amount: i128,
-    project_balance: i128,
-    current_ts: u64,
-    contract_data: &ContractData,
+/// Validates reserve-backed periodic payment constraints.
+///
+/// Ensures the position has not already been paid for the current round and
+/// reserve can cover the computed amount.
+pub fn validate_reserve_balance(
+    amount_to_transfer: i128,
+    position: &Position,
+    contract_balances: &ContractBalance,
+    next_payment_round: u32,
 ) -> Result<(), Error> {
     require!(
-        current_ts > contract_data.ts_fundraising_ends,
-        Error::FundrasingTimeOngoingYet,
-        project_balance >= amount,
-        Error::ContractInsufficientBalance
-    );
-    Ok(())
-}
-
-/// Validates commission withdrawal timing and pending commission amount.
-pub fn validate_withdrawal_commission(
-    amount: i128,
-    current_ts: u64,
-    contract_data: &ContractData,
-) -> Result<(), Error> {
-    require!(
-        current_ts > contract_data.ts_fundraising_ends,
-        Error::FundrasingTimeOngoingYet,
-        amount > 0,
-        Error::ContractInsufficientBalance
+        position.payments_transferred == next_payment_round,
+        Error::PaymentAlreadyProcessedForThisPeriod,
+        amount_to_transfer <= contract_balances.reserve,
+        Error::ContractReserveInsufficientBalance
     );
     Ok(())
 }
@@ -68,6 +56,21 @@ pub fn validate_company_transfer(
         );
     }
 
-    require!(token.balance(owner) >= amount, Error::OwnerInsufficientBalance);
+    require!(
+        token.balance(owner) >= amount,
+        Error::OwnerInsufficientBalance
+    );
+    Ok(())
+}
+
+pub fn validate_enable_disable_investment_liquidations(
+    current_ts: u64,
+    ts_fundraising_ends: u64,
+    ts_payments_starts: u64,
+) -> Result<(), Error> {
+    require!(
+        current_ts > ts_fundraising_ends && current_ts < ts_payments_starts,
+        Error::LiquidationPaymentsOutOfPeriod
+    );
     Ok(())
 }
