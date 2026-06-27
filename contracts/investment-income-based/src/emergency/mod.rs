@@ -1,13 +1,10 @@
-pub mod events;
-pub mod types;
+mod events;
+mod types;
+mod validation; 
 
 use soroban_sdk::Env;
-use stellar_tokens::non_fungible::Base;
 
-use crate::investment;
-use crate::require;
-use crate::shared;
-use crate::validation::{self, Error};
+use crate::shared::{self, types::Error};
 
 pub use types::EmergencyCloseState;
 
@@ -18,7 +15,7 @@ pub use types::EmergencyCloseState;
 ///
 /// # Errors
 /// Returns if activation preconditions are not met.
-pub fn activate_emergency_close(env: &Env) -> Result<bool, Error> {
+pub(crate) fn activate_emergency_close(env: &Env) -> Result<bool, Error> {
     let contract_data = shared::storage::get_contract_data(env);
 
     let contract_balance = shared::storage::get_balances_or_new(env);
@@ -50,32 +47,25 @@ pub fn activate_emergency_close(env: &Env) -> Result<bool, Error> {
 ///
 /// # Errors
 /// Returns if emergency is inactive, investment state is invalid, or transfer fails.
-pub fn emergency_pay_investor(env: &Env, token_id: u32) -> Result<i128, Error> {
+pub(crate) fn emergency_pay_investor(env: &Env, position_id: u32) -> Result<i128, Error> {
     let contract_data = shared::storage::get_contract_data(env);
 
-    let mut investment = investment::storage::get_investment(env, token_id)
-        .ok_or(Error::AddressHasNotInvested)?;
+    let mut position = shared::storage::get_position(env, position_id).ok_or(Error::AddressHasNotInvested)?;
     let mut contract_balance = shared::storage::get_balances_or_new(env);
-    require!(
-        env.ledger().timestamp() > contract_data.ts_fundraising_ends,
-        Error::FundrasingTimeOngoingYet
-    );
     let mut emergency_state = shared::storage::get_emergency_close_state(env)
         .ok_or(Error::EmergencyNotActive)?;
 
     validation::validate_emergency_payment(
-        &investment,
+        &position,
         &contract_balance,
         &emergency_state,
-        env.ledger().timestamp(),
-        &contract_data,
     )?;
 
-    let remaining_obligations = investment.total - investment.paid;
-    let amount_to_pay = emergency_state.calculate_amount_to_pay(&investment);
+    let remaining_obligations = position.total - position.paid;
+    let amount_to_pay = emergency_state.calculate_amount_to_pay(&position);
 
-    let token_owner = Base::owner_of(env, token_id);
-    let token = shared::get_token(env, &contract_data);
+    let token_owner = shared::storage::get_addr_position_id(env, position_id).ok_or(Error::AddressHasNotInvested)?;
+    let token = shared::token::get_token(env, &contract_data);
 
     if amount_to_pay > 0 {
         token
@@ -84,10 +74,10 @@ pub fn emergency_pay_investor(env: &Env, token_id: u32) -> Result<i128, Error> {
             .map_err(|_| Error::InvalidPaymentData)?;
     }
 
-    investment.completed = true;
+    position.completed = true;
     emergency_state.update_after_payment(&amount_to_pay, &remaining_obligations);
 
-    investment::storage::set_investment(env, token_id, &investment);
+    shared::storage::set_position(env, position_id, &position);
     contract_balance.recalculate_from_emergency_payment(&amount_to_pay, &remaining_obligations);
     shared::storage::update_contract_balances(env, &contract_balance);
     shared::storage::set_emergency_close_state(env, &emergency_state);

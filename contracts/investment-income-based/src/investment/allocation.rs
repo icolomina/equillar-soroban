@@ -1,59 +1,113 @@
 use soroban_sdk::Env;
 use stellar_contract_utils::math::wad::Wad;
 
-const LOWER_AMOUNT_FOR_COMMISSION_REDUCTION: i128 = 100;
-const LOWER_DIVISOR: u32 = 10;
-const UPPER_DIVISOR: u32 = 60;
-const AMOUNT_PER_COMMISSION_REDUCTION: i128 = 400;
+use crate::{
+    investment::types::DepositAllocation,
+    shared::types::{ContractData, Position, PositionReturnType},
+};
 
 /// Computes commission denominator tier based on token amount.
 ///
 /// Larger investments increase the denominator (thus reducing commission rate)
 /// up to the configured upper bound.
-pub fn calculate_rate_denominator(amount: &i128, decimals: u32) -> u32 {
+fn calculate_rate_denominator(
+    amount: &i128,
+    decimals: u32,
+    cmr_upper_divisor: u32,
+    cmr_lower_divisor: u32,
+    cmr_reductor: i128,
+) -> u32 {
     let scale_factor = 10_i128.pow(decimals);
     let token_amount = amount / scale_factor;
 
-    if token_amount <= LOWER_AMOUNT_FOR_COMMISSION_REDUCTION {
-        return LOWER_DIVISOR;
+    let step = token_amount / cmr_reductor;
+    if step > cmr_upper_divisor as i128 {
+        return cmr_upper_divisor;
     }
 
-    let step = (token_amount - LOWER_AMOUNT_FOR_COMMISSION_REDUCTION) / AMOUNT_PER_COMMISSION_REDUCTION;
-    if step > UPPER_DIVISOR as i128 {
-        return UPPER_DIVISOR;
+    cmr_lower_divisor + step as u32
+}
+
+fn get_deposit_allocation(
+    env: &Env,
+    amount: &i128,
+    decimals: u32,
+    rate_denominator: u32,
+    interest_rate: u32,
+) -> DepositAllocation {
+    let decimals_for_wad: u8 = decimals.try_into().expect("Token decimals must fit in u8");
+
+    let amount_wad = Wad::from_token_amount(env, *amount, decimals_for_wad);
+    let commission_rate_wad = Wad::from_ratio(
+        env,
+        interest_rate as i128,
+        (rate_denominator as i128) * 10_000,
+    );
+
+    let return_rate_wad = Wad::from_ratio(
+        env,
+        interest_rate as i128,
+        10_000, // o el denominador que corresponda según tu semántica de negocio
+    );
+
+    let amount_to_commission_wad = amount_wad * commission_rate_wad;
+    let amount_to_invest_wad = amount_wad - amount_to_commission_wad;
+    let returns_wad = amount_to_invest_wad * return_rate_wad;
+
+    let commission = amount_to_commission_wad.to_token_amount(env, decimals_for_wad);
+    let deposited = amount_to_invest_wad.to_token_amount(env, decimals_for_wad);
+    let returns = returns_wad.to_token_amount(env, decimals_for_wad);
+
+    DepositAllocation {
+        commission,
+        returns,
+        deposited,
     }
-
-    LOWER_DIVISOR + step as u32
 }
 
-/// Allocation split of an investment amount.
-pub struct InvestmentAllocation {
-    pub amount_to_invest: i128,
-    pub amount_to_reserve_fund: i128,
-    pub amount_to_commission: i128,
-}
-
-impl InvestmentAllocation {
-    /// Splits an investment into project, reserve and commission buckets.
-    pub fn from_investment(env: &Env, amount: &i128, i_rate: &u32, decimals: u32) -> Self {
-        let rate_denominator = calculate_rate_denominator(amount, decimals);
-        let decimals_for_wad: u8 = decimals
-            .try_into()
-            .expect("Token decimals must fit in u8");
-
-        let amount_wad = Wad::from_token_amount(env, *amount, decimals_for_wad);
-        let commission_rate =
-            Wad::from_ratio(env, *i_rate as i128, (rate_denominator as i128) * 10_000);
-        let reserve_rate = Wad::from_ratio(env, 5, 100);
-
-        let amount_to_commission_wad = amount_wad * commission_rate;
-        let amount_to_reserve_fund_wad = amount_wad * reserve_rate;
-        let amount_to_invest_wad = amount_wad - amount_to_commission_wad - amount_to_reserve_fund_wad;
-
-        Self {
-            amount_to_commission: amount_to_commission_wad.to_token_amount(env, decimals_for_wad),
-            amount_to_reserve_fund: amount_to_reserve_fund_wad.to_token_amount(env, decimals_for_wad),
-            amount_to_invest: amount_to_invest_wad.to_token_amount(env, decimals_for_wad),
+fn calculate_regular_payment(
+    deposit_allocation: &DepositAllocation,
+    return_type: &PositionReturnType,
+    return_months: u32,
+) -> i128 {
+    match return_type {
+        PositionReturnType::Coupon => deposit_allocation.returns / return_months as i128,
+        PositionReturnType::ReverseLoan => {
+            deposit_allocation.get_total_claimable() / return_months as i128
         }
+    }
+}
+
+pub fn create_position(
+    env: &Env,
+    cd: &ContractData,
+    amount: &i128,
+    decimals: u32,
+    token_id: u32,
+) -> Position {
+    let rate_denominator = calculate_rate_denominator(
+        amount,
+        decimals,
+        cd.cmr_upper_divisor,
+        cd.cmr_lower_divisor,
+        cd.cmr_reductor,
+    );
+
+    let deposit_allocation =
+        get_deposit_allocation(env, amount, decimals, rate_denominator, cd.interest_rate);
+
+    let regular_payment =
+        calculate_regular_payment(&deposit_allocation, &cd.return_type, cd.return_months);
+
+    Position {
+        deposited: deposit_allocation.deposited,
+        commission: deposit_allocation.commission,
+        returns: deposit_allocation.returns,
+        total: deposit_allocation.get_total_claimable(),
+        completed: false,
+        regular_payment,
+        paid: 0_i128,
+        payments_transferred: 0_u32,
+        token_id,
     }
 }

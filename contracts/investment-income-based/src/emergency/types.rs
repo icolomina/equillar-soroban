@@ -1,7 +1,6 @@
 use soroban_sdk::contracttype;
 
-use crate::investment::Investment;
-use crate::shared::ContractBalance;
+use crate::shared::types::{Position, ContractBalance};
 
 /// Snapshot of pool/obligations used during emergency-close settlement.
 #[contracttype]
@@ -24,8 +23,8 @@ impl EmergencyCloseState {
     }
 
     /// Calculates proportional emergency payout for one investment.
-    pub fn calculate_amount_to_pay(&self, investment: &Investment) -> i128 {
-        let remaining_obligations = investment.total - investment.paid;
+    pub fn calculate_amount_to_pay(&self, position: &Position) -> i128 {
+        let remaining_obligations = position.total - position.paid;
 
         if remaining_obligations >= self.emergency_obligations_left {
             self.emergency_pool_remaining

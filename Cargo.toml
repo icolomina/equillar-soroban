@@ -5,11 +5,10 @@ members = [
 ]
 
 [workspace.dependencies]
-soroban-sdk = "25.3.0"
-stellar-contract-utils = { git = "https://github.com/OpenZeppelin/stellar-contracts.git", branch = "main" }
-stellar-access = { git = "https://github.com/OpenZeppelin/stellar-contracts.git", branch = "main" }
-stellar-macros = { git = "https://github.com/OpenZeppelin/stellar-contracts.git", branch = "main" }
-stellar-tokens = { git = "https://github.com/OpenZeppelin/stellar-contracts.git", branch = "main" }
+soroban-sdk = "25.3.1"
+stellar-contract-utils = "=0.7.1"
+stellar-access = "=0.7.1"
+stellar-macros = "=0.7.1"
 
 [profile.release]
 opt-level = "z"

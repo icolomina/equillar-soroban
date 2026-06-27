@@ -1,12 +1,12 @@
-use crate::collateral::Collateral;
+use super::Collateral;
 use crate::require;
-use crate::validation::Error;
+use crate::shared::types::Error;
 
 /// Validates collateral deposit preconditions.
 ///
 /// When collateral is already configured, only the same collateral token is
 /// accepted. Also enforces source balance sufficiency.
-pub fn validate_add_collateral(
+pub(super) fn validate_add_collateral(
     existing_collateral: Option<Collateral>,
     collateral_token_addr_matches: bool,
     collateral_owner_has_balance: bool,
@@ -26,7 +26,7 @@ pub fn validate_add_collateral(
 }
 
 /// Validates that there is collateral balance to return.
-pub fn validate_collateral_return(collateral_contract_balance: i128) -> Result<(), Error> {
+pub(super) fn validate_collateral_return(collateral_contract_balance: i128) -> Result<(), Error> {
     require!(
         collateral_contract_balance > 0,
         Error::CollateralBalanceIsEmpty

@@ -1,44 +1,17 @@
-pub mod events;
+mod events;
+mod validation;
+mod types;
+mod storage;
 
 use soroban_sdk::token::TokenClient;
-use soroban_sdk::{contractclient, contracttype, token, Address, Env, String, Symbol};
+use soroban_sdk::{token, Address, Env, String};
 use stellar_contract_utils::math::wad::Wad;
-use stellar_tokens::non_fungible::Base;
 
-use crate::investment;
+use types::Collateral;
+use crate::shared::oracle::{Asset, ReflectorClient};
 use crate::require;
 use crate::shared;
-use crate::validation::{self, Error};
-
-#[contracttype]
-#[derive(Clone)]
-pub enum Asset {
-    Stellar(Address),
-    Other(Symbol),
-}
-
-#[contracttype]
-#[derive(Clone)]
-pub struct PriceData {
-    pub price: i128,
-    pub timestamp: u64,
-}
-
-#[contractclient(name = "ReflectorClient")]
-pub trait ReflectorOracle {
-    fn decimals(env: &Env) -> u32;
-    fn x_last_price(env: &Env, base_asset: Asset, quote_asset: Asset) -> Option<PriceData>;
-}
-
-#[contracttype]
-#[derive(Clone)]
-pub struct Collateral {
-    pub token_collateral_address: Address,
-    pub token_collateral_symbol: String,
-    pub address_collateral_token: Address,
-    pub collateral_amount: i128,
-    pub collateral_level: u32,
-}
+use crate::shared::types::{Position, Error, ContractBalance};
 
 fn get_collateral_token<'a>(env: &'a Env, collateral_token: &Address) -> TokenClient<'a> {
     token::Client::new(env, collateral_token)
@@ -52,7 +25,7 @@ fn get_collateral_token<'a>(env: &'a Env, collateral_token: &Address) -> TokenCl
 ///
 /// # Returns
 /// `None` when oracle price is unavailable.
-pub fn calculate_collateral_level(
+pub(crate) fn calculate_collateral_level(
     env: &Env,
     oracle_addr: &Address,
     collateral_token_addr: &Address,
@@ -86,14 +59,14 @@ pub fn calculate_collateral_level(
 ///
 /// Allocation is proportional to remaining obligations of the position over
 /// total contract payment obligations.
-pub fn get_collateral_for_investment(
+pub(crate) fn get_collateral_for_investment(
     env: &Env,
-    investment: &investment::Investment,
-    contract_balance: &shared::ContractBalance,
+    position: &Position,
+    contract_balance: &ContractBalance,
     collateral_amount: i128,
     collateral_token_decimals: u32,
 ) -> i128 {
-    let amount_to_paid_pending = investment.total - investment.paid;
+    let amount_to_paid_pending = position.total - position.paid;
     let investment_collateral_corresponding_ratio =
         Wad::from_ratio(env, amount_to_paid_pending, contract_balance.payment_obligations);
     let amount_collateral_wad =
@@ -111,14 +84,14 @@ pub fn get_collateral_for_investment(
 ///
 /// # Errors
 /// Returns collateral validation errors, transfer failures, or low collateral level.
-pub fn add_collateral(
+pub(crate) fn add_collateral(
     env: &Env,
     collateral_token_addr: Address,
     collateral_token_amount: i128,
     collateral_token_symbol: String,
     collateral_addr: Address,
-) -> Result<Collateral, Error> {
-    let existing_collateral = shared::storage::get_collateral(env);
+) -> Result<u32, Error> {
+    let existing_collateral = storage::get_collateral(env);
     let collateral_token_client = get_collateral_token(env, &collateral_token_addr);
     validation::validate_add_collateral(
         existing_collateral.clone(),
@@ -142,7 +115,7 @@ pub fn add_collateral(
     shared::storage::update_contract_balances(env, &contract_balances);
 
     let contract_data = shared::storage::get_contract_data(env);
-    let contract_token_client = shared::get_token(env, &contract_data);
+    let contract_token_client = shared::token::get_token(env, &contract_data);
     let total_collateral_amount = collateral_token_amount + current_collateral_token_amount;
 
     if let Some(level) = calculate_collateral_level(
@@ -162,14 +135,15 @@ pub fn add_collateral(
             collateral_amount: total_collateral_amount,
             collateral_level: level,
         };
-        shared::storage::update_collateral(env, &collateral);
+        storage::update_collateral(env, &collateral);
         events::emit_collateral_deposited(
             env,
             current_collateral_token_amount,
             collateral_token_amount,
-            &collateral,
+            &collateral.token_collateral_address,
+            &collateral.token_collateral_symbol
         );
-        Ok(collateral)
+        Ok(level)
     } else {
         Err(Error::CollateralLevelTooLow)
     }
@@ -182,37 +156,37 @@ pub fn add_collateral(
 ///
 /// # Errors
 /// Returns if investment/collateral is missing, already completed, or transfer fails.
-pub fn pay_with_collateral(env: &Env, token_id: u32) -> Result<i128, Error> {
-    let mut investment = investment::storage::get_investment(env, token_id)
+pub(crate) fn pay_with_collateral(env: &Env, position_id: u32) -> Result<i128, Error> {
+    let mut position = shared::storage::get_position(env, position_id)
         .ok_or(Error::AddressHasNotInvested)?;
-    require!(!investment.completed, Error::InvestmentCompleted);
+    require!(!position.completed, Error::PositionCompleted);
 
-    let collateral = shared::storage::get_collateral(env).ok_or(Error::CollateralNotConfigured)?;
+    let collateral = storage::get_collateral(env).ok_or(Error::CollateralNotConfigured)?;
     let collateral_token = get_collateral_token(env, &collateral.token_collateral_address);
-    let token_owner = Base::owner_of(env, token_id);
+    let investor_addr = shared::storage::get_addr_position_id(env, position_id).ok_or(Error::AddressHasNotInvested)?;
 
     let mut contract_balance = shared::storage::get_balances_or_new(env);
     let current_collateral_balance = collateral_token.balance(&env.current_contract_address());
     let collateral_amount = get_collateral_for_investment(
         env,
-        &investment,
+        &position,
         &contract_balance,
         current_collateral_balance,
         collateral_token.decimals(),
     );
 
     collateral_token
-        .try_transfer(&env.current_contract_address(), &token_owner, &collateral_amount)
+        .try_transfer(&env.current_contract_address(), &investor_addr, &collateral_amount)
         .map_err(|_| Error::RecipientCannotReceivePayment)?
         .map_err(|_| Error::InvalidPaymentData)?;
 
-    let remaining_obligations = investment.total - investment.paid;
-    investment.completed = true;
-    investment::storage::set_investment(env, token_id, &investment);
+    let remaining_obligations = position.total - position.paid;
+    position.completed = true;
+    shared::storage::set_position(env, position_id, &position);
     contract_balance.recalculate_from_collateral_liquidated(&collateral_amount, &remaining_obligations);
     shared::storage::update_contract_balances(env, &contract_balance);
     shared::events::emit_balance_updated_event(env, &contract_balance);
-    events::emit_collateral_sent(env, token_owner, collateral_amount);
+    events::emit_collateral_sent(env, investor_addr, collateral_amount);
     Ok(collateral_amount)
 }
 
@@ -220,8 +194,8 @@ pub fn pay_with_collateral(env: &Env, token_id: u32) -> Result<i128, Error> {
 ///
 /// # Errors
 /// Returns when collateral is not configured/empty or token transfer fails.
-pub fn return_collateral_to_company(env: &Env) -> Result<i128, Error> {
-    let coll = shared::storage::get_collateral(env).ok_or(Error::CollateralNotConfigured)?;
+pub(crate) fn return_collateral_to_company(env: &Env) -> Result<i128, Error> {
+    let coll = storage::get_collateral(env).ok_or(Error::CollateralNotConfigured)?;
     let collateral_token = get_collateral_token(env, &coll.token_collateral_address);
     let collateral_contract_balance = collateral_token.balance(&env.current_contract_address());
     validation::validate_collateral_return(collateral_contract_balance)?;

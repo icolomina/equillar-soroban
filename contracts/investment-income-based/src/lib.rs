@@ -1,17 +1,16 @@
 #![no_std]
 
-pub mod collateral;
-pub mod contract;
-pub mod emergency;
-pub mod interface;
+mod collateral;
+mod emergency;
 mod constants;
-pub mod investment;
-pub mod payments;
-pub mod shared;
-pub mod treasury;
-pub mod validation;
+mod investment;
+mod payments;
+mod treasury;
+mod validation;
 
-pub use validation::Error;
+pub mod contract;
+pub mod shared;
+
 
 #[macro_export]
 macro_rules! require {

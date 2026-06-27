@@ -1,13 +1,5 @@
 use soroban_sdk::{contractevent, Address, Env};
 
-/// Emitted when a company transfer is received by the reserve.
-#[contractevent]
-pub struct CompanyTransferReceived {
-    #[topic]
-    pub addr: Address,
-    pub total_received: i128,
-}
-
 /// Emitted when project funds are withdrawn.
 #[contractevent]
 pub struct WithdrawalDone {
@@ -22,15 +14,6 @@ pub struct CommissionWithdrawn {
     #[topic]
     pub addr: Address,
     pub amount: i128,
-}
-
-/// Publishes company transfer event.
-pub fn emit_company_transfer_received(env: &Env, total_received: i128) {
-    CompanyTransferReceived {
-        addr: env.current_contract_address(),
-        total_received,
-    }
-    .publish(env);
 }
 
 /// Publishes project withdrawal event.
