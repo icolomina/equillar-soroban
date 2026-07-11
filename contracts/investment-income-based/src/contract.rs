@@ -8,6 +8,7 @@ use crate::emergency;
 use crate::investment;
 use crate::payments;
 use crate::require;
+use crate::treasury;
 
 use crate::shared::types::PositionReturnType;
 use crate::shared::{
@@ -17,7 +18,6 @@ use crate::shared::{
         Position,
     },
 };
-use crate::treasury;
 
 #[contract]
 pub struct InvestmentContract;
@@ -160,6 +160,7 @@ impl InvestmentContract {
     /// # Errors
     /// Propagates period validations (only within the block period)
     #[only_admin]
+    #[when_not_paused]
     pub fn enable_investment_liquidations(env: Env) -> Result<(), Error> {
         payments::enable_liquidate_investments(&env)
     }
@@ -173,6 +174,7 @@ impl InvestmentContract {
     /// # Errors
     /// Propagates period validations (only within the block period)
     #[only_admin]
+    #[when_not_paused]
     pub fn disable_investment_liquidations(env: Env) -> Result<(), Error> {
         payments::disable_liquidate_investments(&env)
     }
@@ -207,6 +209,7 @@ impl InvestmentContract {
     /// # Access Control
     /// Admin only.
     #[only_admin]
+    #[when_not_paused]
     pub fn refund_investor(env: Env, token_id: u32) -> Result<i128, Error> {
         investment::refund_investor(&env, token_id)
     }
@@ -227,6 +230,7 @@ impl InvestmentContract {
     /// # Access Control
     /// Admin only.
     #[only_admin]
+    #[when_not_paused]
     pub fn grant_operator(env: Env, operator: Address) -> Result<(), Error> {
         let operator_role = Symbol::new(&env, "operator");
         access_control::grant_role_no_auth(&env, &operator, &operator_role, &admin(&env));
@@ -239,6 +243,7 @@ impl InvestmentContract {
     /// - Admin only.
     /// - `operator` must currently hold `operator` role.
     #[only_admin]
+    #[when_not_paused]
     #[has_role(operator, "operator")]
     pub fn revoke_operator(env: Env, operator: Address) -> Result<(), Error> {
         let operator_role = Symbol::new(&env, "operator");
@@ -253,6 +258,7 @@ impl InvestmentContract {
     /// # Access Control
     /// Admin only.
     #[only_admin]
+    #[when_not_paused]
     pub fn grant_company(env: Env, company: Address) -> Result<(), Error> {
         let company_role = Symbol::new(&env, "company");
         access_control::grant_role_no_auth(&env, &company, &company_role, &admin(&env));
@@ -265,6 +271,7 @@ impl InvestmentContract {
     /// - Admin only.
     /// - `company` must currently hold `company` role.
     #[only_admin]
+    #[when_not_paused]
     #[has_role(company, "company")]
     pub fn revoke_company(env: Env, company: Address) -> Result<(), Error> {
         let company_role = Symbol::new(&env, "company");
@@ -279,6 +286,7 @@ impl InvestmentContract {
     /// # Access Control
     /// Admin only.
     #[only_admin]
+    #[when_not_paused]
     pub fn grant_manager(env: Env, manager: Address) -> Result<(), Error> {
         let manager_role = Symbol::new(&env, "manager");
         access_control::grant_role_no_auth(&env, &manager, &manager_role, &admin(&env));
@@ -291,6 +299,7 @@ impl InvestmentContract {
     /// - Admin only.
     /// - `manager` must currently hold `manager` role.
     #[only_admin]
+    #[when_not_paused]
     #[has_role(manager, "manager")]
     pub fn revoke_manager(env: Env, manager: Address) -> Result<(), Error> {
         let manager_role = Symbol::new(&env, "manager");
@@ -305,6 +314,7 @@ impl InvestmentContract {
     /// # Access Control
     /// Admin only.
     #[only_admin]
+    #[when_not_paused]
     pub fn transfer_admin_role(env: Env, new_admin: Address) -> Result<(), Error> {
         let live_until_ledger = env.ledger().sequence() + 17_280_u32; // 1 day in ledgers (assuming 5s ledger close time)
         access_control::transfer_admin_role(&env, &new_admin, live_until_ledger);
@@ -316,6 +326,7 @@ impl InvestmentContract {
     /// # Access Control
     /// Admin-gated endpoint in this contract facade.
     #[only_admin]
+    #[when_not_paused]
     pub fn accept_admin_transfer_role(env: Env) -> Result<(), Error> {
         access_control::accept_admin_transfer(&env);
         Ok(())
@@ -347,15 +358,27 @@ impl InvestmentContract {
         treasury::withdrawn_commissions(&env, to)
     }
 
-    /// Registers an inbound transfer from a company address for next payment round.
+    /// Withdraws accumulated commissions to `to`.
     ///
     /// # Access Control
     /// - Contract must not be paused.
     /// - Admin only.
-    /// - `from` must hold `company` role.
+    /// - `to` must hold `manager` role.
     #[when_not_paused]
     #[only_admin]
-    #[has_role(from, "company")]
+    #[has_role(to, "manager")]
+    pub fn withdrawn_all(env: Env, to: Address) -> Result<i128, Error> {
+        treasury::withdrawn_all(&env, to)
+    }
+
+    /// Registers an inbound transfer from a company address for next payment round.
+    ///
+    /// # Access Control
+    /// - Contract must not be paused.
+    /// - `from` must sign the trx.
+    /// - `from` must hold `company` role.
+    #[when_not_paused]
+    #[only_role(from, "company")]
     pub fn add_company_transfer(env: Env, amount: i128, from: Address) -> Result<bool, Error> {
         payments::add_company_transfer(&env, from, amount)
     }
@@ -386,11 +409,10 @@ impl InvestmentContract {
     ///
     /// # Access Control
     /// - Contract must not be paused.
-    /// - Admin only.
+    /// - `collateral_addr` must sign the trx 
     /// - `collateral_addr` must hold `company` role.
-    #[only_admin]
     #[when_not_paused]
-    #[has_role(collateral_addr, "company")]
+    #[only_role(collateral_addr, "company")]
     pub fn add_collateral(
         env: Env,
         collateral_token_addr: Address,

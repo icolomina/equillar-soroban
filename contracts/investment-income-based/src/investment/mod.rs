@@ -53,7 +53,7 @@ pub fn invest(
 
     shared::storage::set_position(env, position_id, &position);
     shared::storage::set_addr_position_id(env, position_id, investor.clone());
-    contract_balance.recalculate_from_position(&position);
+    contract_balance.recalculate_from_position(&position)?;
     contract_data.amount_to_pay_per_month += position.regular_payment;
 
     shared::storage::update_contract_data(env, &contract_data);
@@ -104,7 +104,7 @@ pub fn refund_investor(env: &Env, position_id: u32) -> Result<i128, Error> {
         .map_err(|_| Error::InvalidPaymentData)?;
 
     position.completed = true;
-    contract_balance.recalculate_from_refunded_to_investor(&position);
+    contract_balance.recalculate_from_refunded_to_investor(&position)?;
     shared::storage::set_position(env, position_id, &position);
     shared::storage::update_contract_balances(env, &contract_balance);
     events::emit_investment_deposit_refunded(env, investment_owner, amount_to_refund);
