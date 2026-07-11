@@ -16,6 +16,7 @@ pub struct PriceData {
 
 #[contractclient(name = "ReflectorClient")]
 pub trait ReflectorOracle {
+    fn base(env: &Env) -> Asset;
     fn decimals(env: &Env) -> u32;
-    fn x_last_price(env: &Env, base_asset: Asset, quote_asset: Asset) -> Option<PriceData>;
+    fn lastprice(env: &Env, asset: Asset) -> Option<PriceData>;
 }

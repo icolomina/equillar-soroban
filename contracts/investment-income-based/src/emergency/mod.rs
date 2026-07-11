@@ -26,14 +26,13 @@ pub(crate) fn activate_emergency_close(env: &Env) -> Result<bool, Error> {
         shared::storage::get_emergency_close_state(env),
     )?;
 
-    let emergency_obligations_total = contract_balance.payment_obligations;
     let emergency_state = EmergencyCloseState::from_contract_balance(&contract_balance);
 
     shared::storage::set_emergency_close_state(env, &emergency_state);
     events::emit_emergency_close_activated(
         env,
         emergency_state.emergency_pool_total,
-        emergency_obligations_total,
+        emergency_state.emergency_obligations_left
     );
 
     Ok(true)
@@ -78,7 +77,7 @@ pub(crate) fn emergency_pay_investor(env: &Env, position_id: u32) -> Result<i128
     emergency_state.update_after_payment(&amount_to_pay, &remaining_obligations);
 
     shared::storage::set_position(env, position_id, &position);
-    contract_balance.recalculate_from_emergency_payment(&amount_to_pay, &remaining_obligations);
+    contract_balance.recalculate_from_emergency_payment(amount_to_pay, remaining_obligations)?;
     shared::storage::update_contract_balances(env, &contract_balance);
     shared::storage::set_emergency_close_state(env, &emergency_state);
     shared::events::emit_balance_updated_event(env, &contract_balance);

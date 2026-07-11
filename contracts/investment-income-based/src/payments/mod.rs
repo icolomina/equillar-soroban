@@ -13,20 +13,28 @@ fn update_position_for_payment_round(
     return_type: &PositionReturnType,
     return_months: u32,
 ) -> i128 {
-    let mut amount_to_transfer = position.regular_payment;
 
-    position.paid += position.regular_payment;
+    let total = match return_type {
+        PositionReturnType::Coupon => position.returns,
+        PositionReturnType::ReverseLoan => position.total,
+    };
+    
+    let mut amount_to_transfer: i128;
     position.payments_transferred += 1;
 
     if position.payments_transferred >= return_months {
         position.completed = true;
-
-        if return_type == &PositionReturnType::Coupon {
-            position.paid += position.deposited;
+        amount_to_transfer = total - position.paid;
+    
+        if *return_type == PositionReturnType::Coupon {
             amount_to_transfer += position.deposited;
         }
     }
+    else {
+        amount_to_transfer = position.regular_payment;
+    }
 
+    position.paid += amount_to_transfer;
     amount_to_transfer
 }
 
@@ -78,7 +86,7 @@ pub(crate) fn process_investor_payment(env: &Env, position_id: u32) -> Result<Po
     }
 
     shared::storage::set_position(env, position_id, &position);
-    contract_balance.recalculate_from_payment_to_investor(&amount_to_transfer);
+    contract_balance.recalculate_from_payment_to_investor(amount_to_transfer)?;
     shared::storage::update_contract_balances(env, &contract_balance);
 
     shared::events::emit_balance_updated_event(env, &contract_balance);
@@ -117,7 +125,7 @@ pub(crate) fn add_company_transfer(env: &Env, from: Address, amount: i128) -> Re
         .map_err(|_| Error::RecipientCannotReceivePayment)?
         .map_err(|_| Error::InvalidPaymentData)?;
 
-    contract_balance.recalculate_from_company_contribution(&amount);
+    contract_balance.recalculate_from_company_contribution(amount)?;
     shared::storage::update_contract_balances(env, &contract_balance);
     shared::events::emit_balance_updated_event(env, &contract_balance);
     events::emit_company_transfer_received(env, amount);

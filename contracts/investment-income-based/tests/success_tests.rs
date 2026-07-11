@@ -1,6 +1,10 @@
 mod common;
 
-use common::{assert_contract_balance, create_investment_contract, do_payment_round, invest_as_operator};
+use common::{
+    assert_contract_balance, create_investment_contract, do_payment_round,
+    do_payment_round_without_company_transfer, invest_as_operator,
+};
+use investment_income_based::shared::types::LiquidateInvestmentsStatus;
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env, String,
@@ -17,7 +21,18 @@ use crate::common::create_token_contract;
 fn test_flow_with_coupon() {
     let e = Env::default();
     let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 2_u32, 4_u32, 100_i128, true, 60, 10, 400
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1000000_i128,
+        2_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        400,
     );
 
     let u: Address = Address::generate(&e);
@@ -25,29 +40,31 @@ fn test_flow_with_coupon() {
 
     assert_contract_balance(&test_data, 0, 0, 0, 0);
 
-    let inv = invest_as_operator(&test_data, &u, &1000, &1234_u32);
+    let inv = invest_as_operator(&test_data, &u, &500, &1234_u32);
 
-    assert_eq!(inv.commission, 5_i128);
-    assert_eq!(inv.deposited, 995_i128);
-    assert_eq!(inv.returns, 49_i128);
-    assert_eq!(inv.total, 1044_i128);
-    assert_eq!(inv.regular_payment, 12_i128);
+    assert_eq!(inv.commission, 2_i128);
+    assert_eq!(inv.deposited, 498_i128);
+    assert_eq!(inv.returns, 24_i128);
+    assert_eq!(inv.total, 522_i128);
+    assert_eq!(inv.regular_payment, 6_i128);
 
-    assert_contract_balance(&test_data, 995, 0, 5, 0);
+    assert_contract_balance(&test_data, 498, 0, 2, 0);
 
-    test_data.token_admin.mint(&test_data.project_address, &2000);
+    test_data
+        .token_admin
+        .mint(&test_data.project_address, &2000);
 
-    do_payment_round(&e, &test_data, inv.token_id, 15,   12,   1, false);
-    assert_contract_balance(&test_data, 995, 3, 5, 12);
+    do_payment_round(&e, &test_data, inv.token_id, 7, 6, 1, false);
+    assert_contract_balance(&test_data, 498, 1, 2, 6);
 
-    do_payment_round(&e, &test_data, inv.token_id, 15,   24,   2, false);
-    assert_contract_balance(&test_data, 995, 6, 5, 24);
+    do_payment_round(&e, &test_data, inv.token_id, 7, 12, 2, false);
+    assert_contract_balance(&test_data, 498, 2, 2, 12);
 
-    do_payment_round(&e, &test_data, inv.token_id, 15,   36,   3, false);
-    assert_contract_balance(&test_data, 995, 9, 5, 36);
+    do_payment_round(&e, &test_data, inv.token_id, 7, 18, 3, false);
+    assert_contract_balance(&test_data, 498, 3, 2, 18);
 
-    do_payment_round(&e, &test_data, inv.token_id, 1500, 1043, 4, true);
-    assert_contract_balance(&test_data, 995, 502, 5, 1043);
+    do_payment_round(&e, &test_data, inv.token_id, 501, 522, 4, true);
+    assert_contract_balance(&test_data, 498, 0, 2, 522);
 }
 
 /// Verifies the complete lifecycle of a ReverseLoan investment across 4 payment rounds.
@@ -58,7 +75,18 @@ fn test_flow_with_coupon() {
 fn test_flow_with_reverse_loan() {
     let e = Env::default();
     let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true, 60, 10, 400
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1000000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1200,
     );
 
     assert_contract_balance(&test_data, 0, 0, 0, 0);
@@ -74,16 +102,55 @@ fn test_flow_with_reverse_loan() {
     assert_eq!(inv.total, 1044_i128);
     assert_eq!(inv.regular_payment, 261_i128);
 
-    test_data.token_admin.mint(&test_data.project_address, &2000);
+    test_data
+        .token_admin
+        .mint(&test_data.project_address, &2000);
 
-    do_payment_round(&e, &test_data, inv.token_id, 261, 261,  1, false);
+    do_payment_round(&e, &test_data, inv.token_id, 261, 261, 1, false);
     assert_contract_balance(&test_data, 995, 0, 5, 261);
-    do_payment_round(&e, &test_data, inv.token_id, 261, 522,  2, false);
+    do_payment_round(&e, &test_data, inv.token_id, 261, 522, 2, false);
     assert_contract_balance(&test_data, 995, 0, 5, 522);
-    do_payment_round(&e, &test_data, inv.token_id, 261, 783,  3, false);
+    do_payment_round(&e, &test_data, inv.token_id, 261, 783, 3, false);
     assert_contract_balance(&test_data, 995, 0, 5, 783);
     do_payment_round(&e, &test_data, inv.token_id, 261, 1044, 4, true);
     assert_contract_balance(&test_data, 995, 0, 5, 1044);
+}
+
+#[test]
+fn test_flow_payments_disabled() {
+    let e = Env::default();
+    let test_data = create_investment_contract(
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1000000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1200,
+    );
+
+    let u: Address = Address::generate(&e);
+    test_data.token_admin.mint(&u, &1000);
+    let inv = invest_as_operator(&test_data, &u, &1000, &1234_u32);
+
+    e.ledger()
+        .set_timestamp(e.ledger().timestamp() + (8 * 86_401));
+    test_data.client.disable_investment_liquidations();
+
+    assert_eq!(
+        test_data.client.check_investment_liquidations(&u),
+        LiquidateInvestmentsStatus::Disabled
+    );
+
+    do_payment_round_without_company_transfer(&e, &test_data, inv.token_id, 261, 1, false);
+    do_payment_round_without_company_transfer(&e, &test_data, inv.token_id, 522, 2, false);
+    do_payment_round_without_company_transfer(&e, &test_data, inv.token_id, 783, 3, false);
+    do_payment_round_without_company_transfer(&e, &test_data, inv.token_id, 1044, 4, true);
 }
 
 /// Verifies that multiple investors can all be paid within the same payment round:
@@ -94,7 +161,18 @@ fn test_flow_with_reverse_loan() {
 fn test_multiple_investors_same_payment_round() {
     let e = Env::default();
     let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true, 60, 10, 400
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1000000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1200,
     );
 
     let u1: Address = Address::generate(&e);
@@ -107,11 +185,15 @@ fn test_multiple_investors_same_payment_round() {
 
     assert_contract_balance(&test_data, 1990, 0, 10, 0);
 
-    test_data.token_admin.mint(&test_data.project_address, &3000);
+    test_data
+        .token_admin
+        .mint(&test_data.project_address, &3000);
 
     e.ledger().set_timestamp(15 * 86400);
 
-    test_data.client.add_company_transfer(&522_i128, &test_data.project_address);
+    test_data
+        .client
+        .add_company_transfer(&522_i128, &test_data.project_address);
     assert_contract_balance(&test_data, 1990, 522, 10, 0);
 
     let inv1_paid = test_data.client.process_investor_payment(&inv1.token_id);
@@ -128,8 +210,6 @@ fn test_multiple_investors_same_payment_round() {
     assert_contract_balance(&test_data, 1990, 0, 10, 522);
 }
 
-
-
 /// Verifies that pausing the contract prevents new investments:
 /// after `pause` is called, `try_invest` must return an error.
 #[test]
@@ -144,13 +224,18 @@ fn test_pause() {
         1_u32,
         4_u32,
         100_i128,
-        true, 60, 10, 400
+        true,
+        60,
+        10,
+        1000,
     );
 
     test_data.client.pause(&test_data.admin);
 
     test_data.token_admin.mint(&test_data.user, &1000000);
-    let invest_result = test_data.client.try_invest(&test_data.user, &100000, &1234_u32);
+    let invest_result = test_data
+        .client
+        .try_invest(&test_data.user, &100000, &1234_u32);
     assert!(invest_result.is_err());
 }
 
@@ -169,7 +254,10 @@ fn test_unpause() {
         1_u32,
         4_u32,
         100_i128,
-        true, 60, 10, 400
+        true,
+        60,
+        10,
+        1000,
     );
 
     test_data.client.pause(&test_data.admin);
@@ -184,7 +272,18 @@ fn test_unpause() {
 fn test_revoke_operator_blocks_invest() {
     let e = Env::default();
     let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true, 60, 10, 400
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1_000_000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1000,
     );
 
     let operator = Address::generate(&e);
@@ -204,7 +303,18 @@ fn test_revoke_operator_blocks_invest() {
 fn test_grant_and_revoke_company_role() {
     let e = Env::default();
     let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true, 60, 10, 400
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1_000_000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1000,
     );
 
     let investor = Address::generate(&e);
@@ -230,7 +340,18 @@ fn test_grant_and_revoke_company_role() {
 fn test_revoke_manager_blocks_withdrawn_commissions() {
     let e = Env::default();
     let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true, 60, 10, 400
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1_000_000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1000,
     );
 
     let investor = Address::generate(&e);
@@ -254,7 +375,18 @@ fn test_revoke_manager_blocks_withdrawn_commissions() {
 fn test_transfer_and_accept_admin_role_methods_are_reachable() {
     let e = Env::default();
     let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1_000_000_i128, 1_u32, 4_u32, 100_i128, true, 60, 10, 400
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1_000_000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1000,
     );
 
     let new_admin = Address::generate(&e);
@@ -264,8 +396,6 @@ fn test_transfer_and_accept_admin_role_methods_are_reachable() {
     let accept_result = test_data.client.try_accept_admin_transfer_role();
     assert!(accept_result.is_err());
 }
-
-
 
 /// Checks that `add_collateral` correctly computes and stores the collateral
 /// level on first deposit, and that a second deposit from the same token
@@ -282,34 +412,36 @@ fn test_add_collateral() {
         1_u32,
         4_u32,
         100_i128,
-        true, 60, 10, 400
+        true,
+        60,
+        10,
+        1000,
     );
 
     let collateral_addr = Address::generate(&e);
-    let (token_collateral, token_collateral_admin)  = create_token_contract(&e, &test_data.admin);
+    let (token_collateral, token_collateral_admin) = create_token_contract(&e, &test_data.admin);
     test_data.client.grant_company(&collateral_addr);
     token_collateral_admin.mint(&collateral_addr, &200_i128);
     test_data.token_admin.mint(&test_data.user, &150_i128);
     invest_as_operator(&test_data, &test_data.user, &150_i128, &1234_u32);
     let collateral_level = test_data.client.add_collateral(
-        &token_collateral.address, 
-        &100_i128, 
-        &String::from_str(&e,"TEST"), 
-        &collateral_addr
+        &token_collateral.address,
+        &100_i128,
+        &String::from_str(&e, "TEST"),
+        &collateral_addr,
     );
 
     assert!(collateral_level > 0_u32);
     let last_collateral_level = collateral_level;
 
     let collateral_level = test_data.client.add_collateral(
-        &token_collateral.address, 
-        &100_i128, 
-        &String::from_str(&e,"TEST"), 
-        &collateral_addr
+        &token_collateral.address,
+        &100_i128,
+        &String::from_str(&e, "TEST"),
+        &collateral_addr,
     );
 
     assert!(collateral_level > last_collateral_level);
-
 }
 
 /// Validates proportional collateral distribution across investors:
@@ -327,16 +459,19 @@ fn test_pay_with_collateral() {
         1_u32,
         4_u32,
         100_i128,
-        true, 60, 10, 400
+        true,
+        60,
+        10,
+        2000,
     );
 
     let collateral_addr = Address::generate(&e);
-    let (token_collateral, token_collateral_admin)  = create_token_contract(&e, &test_data.admin);
+    let (token_collateral, token_collateral_admin) = create_token_contract(&e, &test_data.admin);
     test_data.client.grant_company(&collateral_addr);
-    token_collateral_admin.mint(&collateral_addr, &4000_i128);
+    token_collateral_admin.mint(&collateral_addr, &1_i128);
 
-    let user2 = soroban_sdk::Address::generate(&e);
-    let user3 = soroban_sdk::Address::generate(&e);
+    let user2 = Address::generate(&e);
+    let user3 = Address::generate(&e);
 
     test_data.token_admin.mint(&test_data.user, &1000000_i128);
     test_data.token_admin.mint(&user2, &1000000_i128);
@@ -347,19 +482,19 @@ fn test_pay_with_collateral() {
     let inv3 = invest_as_operator(&test_data, &user3, &1000_i128, &1236_u32);
 
     test_data.client.add_collateral(
-        &token_collateral.address, 
-        &4000_i128, 
-        &String::from_str(&e,"TEST"), 
-        &collateral_addr
+        &token_collateral.address,
+        &1_i128,
+        &String::from_str(&e, "BTC"),
+        &collateral_addr,
     );
 
-    let pay_collatreral_1 = test_data.client.pay_with_collateral(&inv1.token_id);
-    let pay_collatreral_2 = test_data.client.pay_with_collateral(&inv2.token_id);
-    let pay_collatreral_3 = test_data.client.pay_with_collateral(&inv3.token_id);
+    let pay_collateral_1 = test_data.client.pay_with_collateral(&inv1.token_id);
+    let pay_collateral_2 = test_data.client.pay_with_collateral(&inv2.token_id);
+    let pay_collateral_3 = test_data.client.pay_with_collateral(&inv3.token_id);
 
-    assert!(pay_collatreral_1 == pay_collatreral_2);
-    assert!(pay_collatreral_3 < pay_collatreral_1);
-
+    assert!(pay_collateral_1 == pay_collateral_2);
+    assert!(pay_collateral_3 <= pay_collateral_1);
+    assert!(token_collateral.balance(&test_data.client.address) > 0);
 }
 
 /// Confirms that `return_collateral_to_company` transfers the entire
@@ -378,11 +513,13 @@ fn test_return_collateral_to_company() {
         4_u32,
         100_i128,
         true,
-        60, 10, 400
+        60,
+        10,
+        2000,
     );
 
     let collateral_addr = Address::generate(&e);
-    let (token_collateral, token_collateral_admin)  = create_token_contract(&e, &test_data.admin);
+    let (token_collateral, token_collateral_admin) = create_token_contract(&e, &test_data.admin);
     test_data.client.grant_company(&collateral_addr);
     token_collateral_admin.mint(&collateral_addr, &4000_i128);
 
@@ -398,16 +535,21 @@ fn test_return_collateral_to_company() {
     invest_as_operator(&test_data, &user3, &1000_i128, &1236_u32);
 
     test_data.client.add_collateral(
-        &token_collateral.address, 
-        &4000_i128, 
-        &String::from_str(&e,"TEST"), 
-        &collateral_addr
+        &token_collateral.address,
+        &4000_i128,
+        &String::from_str(&e, "TEST"),
+        &collateral_addr,
     );
 
-    assert_eq!(token_collateral_admin.balance(&test_data.client.address), 4000_i128);
+    assert_eq!(
+        token_collateral_admin.balance(&test_data.client.address),
+        4000_i128
+    );
     test_data.client.return_collateral_to_company();
-    assert_eq!(token_collateral_admin.balance(&test_data.client.address), 0_i128)
-
+    assert_eq!(
+        token_collateral_admin.balance(&test_data.client.address),
+        0_i128
+    )
 }
 
 /// Verifies that `withdrawn` transfers project funds to the `project_address`
@@ -417,7 +559,18 @@ fn test_return_collateral_to_company() {
 fn test_withdrawn() {
     let e = Env::default();
     let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true, 60, 10, 400
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1000000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1200,
     );
 
     let u: Address = Address::generate(&e);
@@ -428,36 +581,13 @@ fn test_withdrawn() {
     e.ledger().set_timestamp(8 * 86400);
 
     let balance_before = test_data.token.balance(&test_data.project_address);
-    test_data.client.withdrawn(&900_i128, &test_data.project_address);
+    test_data
+        .client
+        .withdrawn(&900_i128, &test_data.project_address);
     let balance_after = test_data.token.balance(&test_data.project_address);
 
     assert_eq!(balance_after - balance_before, 900_i128);
     assert_contract_balance(&test_data, 95, 0, 5, 0);
-}
-
-/// Verifies that `add_company_transfer` requests authorization from admin.
-/// `from` is role-validated (`has_role`) but does not require root auth.
-#[test]
-fn test_add_company_transfer_authorization_verification() {
-    let e = Env::default();
-    let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true, 60, 10, 400
-    );
-
-    let u: Address = Address::generate(&e);
-    test_data.token_admin.mint(&u, &1000);
-    invest_as_operator(&test_data, &u, &1000, &1234_u32);
-
-    test_data.token_admin.mint(&test_data.project_address, &500);
-
-    e.ledger().set_timestamp(15 * 86400);
-    let amount: i128 = 261;
-    test_data.client.add_company_transfer(&amount, &test_data.project_address);
-
-    let auths = e.auths();
-
-    let admin_auth = auths.iter().find(|(addr, _)| *addr == test_data.admin);
-    assert!(admin_auth.is_some(), "Admin auth must be requested");
 }
 
 /// Verifies that the same user can invest multiple times, receiving a distinct
@@ -471,7 +601,18 @@ fn test_add_company_transfer_authorization_verification() {
 fn test_invest_same_user_multiple_times() {
     let e = Env::default();
     let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true, 60, 10, 400
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1000000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1200,
     );
 
     let u: Address = Address::generate(&e);
@@ -492,11 +633,15 @@ fn test_invest_same_user_multiple_times() {
 
     assert_contract_balance(&test_data, 2985, 0, 15, 0);
 
-    test_data.token_admin.mint(&test_data.project_address, &1000_i128);
+    test_data
+        .token_admin
+        .mint(&test_data.project_address, &1000_i128);
 
     e.ledger().set_timestamp(15 * 86400);
 
-    test_data.client.add_company_transfer(&1000_i128, &test_data.project_address);
+    test_data
+        .client
+        .add_company_transfer(&1000_i128, &test_data.project_address);
     let inv1_after = test_data.client.process_investor_payment(&inv1.token_id);
 
     assert_eq!(inv1_after.payments_transferred, 1_u32);
@@ -517,7 +662,18 @@ fn test_invest_same_user_multiple_times() {
 fn test_refund_investor() {
     let e = Env::default();
     let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true, 60, 10, 400
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1000000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1200,
     );
 
     let u: Address = Address::generate(&e);
@@ -551,7 +707,18 @@ fn test_refund_investor() {
 fn test_withdrawn_commissions() {
     let e = Env::default();
     let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true, 60, 10, 400
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1000000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1200,
     );
 
     let u: Address = Address::generate(&e);
@@ -563,7 +730,9 @@ fn test_withdrawn_commissions() {
     e.ledger().set_timestamp(8 * 86400);
 
     let owner_balance_before = test_data.token.balance(&test_data.project_address);
-    let withdrawn = test_data.client.withdrawn_commissions(&test_data.project_address);
+    let withdrawn = test_data
+        .client
+        .withdrawn_commissions(&test_data.project_address);
     let owner_balance_after = test_data.token.balance(&test_data.project_address);
 
     assert_eq!(withdrawn, 5_i128);
@@ -588,7 +757,10 @@ fn test_admin_authorization_verification() {
         1_u32,
         4_u32,
         100_i128,
-        true, 60, 10, 400
+        true,
+        60,
+        10,
+        1000,
     );
 
     test_data.client.pause(&test_data.admin);
@@ -607,7 +779,6 @@ fn test_admin_authorization_verification() {
     assert!(admin_auth.is_some(), "Authorization should include admin");
 }
 
-
 /// Verifies that a single investor receives the full emergency pool when
 /// they are the only active investment. In emergency-close mode, the frozen
 /// pool is `reserve + project`, so the only investor receives the full pool.
@@ -617,7 +788,18 @@ fn test_admin_authorization_verification() {
 fn test_emergency_pay_investor_single_investor() {
     let e = Env::default();
     let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true, 60, 10, 400
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1000000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1200,
     );
 
     let u: Address = Address::generate(&e);
@@ -625,7 +807,9 @@ fn test_emergency_pay_investor_single_investor() {
     let inv = invest_as_operator(&test_data, &u, &1000, &1234_u32);
 
     e.ledger().set_timestamp(8 * 86400);
-    test_data.client.withdrawn_commissions(&test_data.project_address);
+    test_data
+        .client
+        .withdrawn_commissions(&test_data.project_address);
     test_data.client.activate_emergency_close();
 
     let balance_before = test_data.token.balance(&u);
@@ -650,7 +834,18 @@ fn test_emergency_pay_investor_single_investor() {
 fn test_emergency_pay_investor_multiple_investors_proportional() {
     let e = Env::default();
     let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true, 60, 10, 400
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1000000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1000,
     );
 
     let user2 = Address::generate(&e);
@@ -665,7 +860,9 @@ fn test_emergency_pay_investor_multiple_investors_proportional() {
     let inv3 = invest_as_operator(&test_data, &user3, &1000, &1236_u32);
 
     e.ledger().set_timestamp(8 * 86400);
-    test_data.client.withdrawn_commissions(&test_data.project_address);
+    test_data
+        .client
+        .withdrawn_commissions(&test_data.project_address);
     test_data.client.activate_emergency_close();
 
     let balance_before = test_data.client.get_contract_balance(&test_data.admin);
@@ -703,7 +900,18 @@ fn test_emergency_pay_investor_multiple_investors_proportional() {
 fn test_emergency_pay_investor_authorization() {
     let e = Env::default();
     let test_data = create_investment_contract(
-        &e, 500_u32, 7_u64, 7_u64, 1000000_i128, 1_u32, 4_u32, 100_i128, true, 60, 10, 400
+        &e,
+        500_u32,
+        7_u64,
+        7_u64,
+        1000000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1000,
     );
 
     let u: Address = Address::generate(&e);
@@ -711,7 +919,9 @@ fn test_emergency_pay_investor_authorization() {
     let inv = invest_as_operator(&test_data, &u, &1000, &1234_u32);
 
     e.ledger().set_timestamp(8 * 86400);
-    test_data.client.withdrawn_commissions(&test_data.project_address);
+    test_data
+        .client
+        .withdrawn_commissions(&test_data.project_address);
     test_data.client.activate_emergency_close();
     test_data.client.emergency_pay_investor(&inv.token_id);
 

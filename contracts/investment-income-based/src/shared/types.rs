@@ -51,53 +51,101 @@ impl ContractBalance {
     pub fn recalculate_from_position(
         &mut self,
         position: &Position,
-    ) {
-        self.comission += position.commission;
-        self.project += position.deposited;
-        self.payment_obligations += position.total
+    ) -> Result<(), Error>  {
+        self.comission = self.comission
+            .checked_add(position.commission)
+            .ok_or(Error::BalanceUpdateOverflow)?;
+        self.project = self.project
+            .checked_add(position.deposited)
+            .ok_or(Error::BalanceUpdateOverflow)?;
+        self.payment_obligations = self.payment_obligations
+            .checked_add(position.total)
+            .ok_or(Error::BalanceUpdateOverflow)?;
+
+        Ok(())
     }
 
     /// Applies accounting effects of a regular investor payment.
-    pub fn recalculate_from_payment_to_investor(&mut self, amount: &i128) {
-        self.reserve -= amount;
-        self.payments += amount;
-        self.payment_obligations -= amount;
+    pub fn recalculate_from_payment_to_investor(&mut self, amount: i128) -> Result<(), Error> {
+        self.reserve = self.reserve
+            .checked_sub(amount)
+            .ok_or(Error::BalanceUpdateUnderflow)?;
+
+        self.payments = self.payments
+            .checked_add(amount)
+            .ok_or(Error::BalanceUpdateOverflow)?;
+
+        self.payment_obligations = self.payment_obligations
+            .checked_sub(amount)
+            .ok_or(Error::BalanceUpdateOverflow)?;
+
+        Ok(())
     }
 
     /// Applies accounting effects of a company transfer into reserve.
-    pub fn recalculate_from_company_contribution(&mut self, amount: &i128) {
-        self.reserve += amount;
+    pub fn recalculate_from_company_contribution(&mut self, amount: i128) -> Result<(), Error> {
+        self.reserve = self.reserve
+            .checked_add(amount)
+            .ok_or(Error::BalanceUpdateOverflow)?;
+
+        Ok(())
     }
 
     /// Applies accounting effects of withdrawing project funds.
-    pub fn recalculate_from_company_withdrawal(&mut self, amount: &i128) {
-        self.project -= amount;
-        self.project_withdrawals += amount;
+    pub fn recalculate_from_company_withdrawal(&mut self, amount: i128) -> Result<(), Error> {
+        self.project = self.project
+            .checked_sub(amount)
+            .ok_or(Error::BalanceUpdateUnderflow)?;
+
+        self.project_withdrawals = self.project_withdrawals
+            .checked_add(amount)
+            .ok_or(Error::BalanceUpdateOverflow)?;
+
+        Ok(())
     }
 
     /// Applies accounting effects of commission withdrawal.
-    pub fn recalculate_from_comission_withdrawal(&mut self, amount: &i128) {
-        self.comission_withdrawal += amount;
+    pub fn recalculate_from_comission_withdrawal(&mut self, amount: i128) -> Result<(), Error> {
+        self.comission_withdrawal = self.comission_withdrawal
+            .checked_add(amount)
+            .ok_or(Error::BalanceUpdateOverflow)?;
+
+        Ok(())
     }
 
     /// Applies accounting effects of collateral deposit reception.
-    pub fn recalculate_from_collateral_received(&mut self, amount: &i128) {
-        self.collateral_received += amount;
+    pub fn recalculate_from_collateral_received(&mut self, amount: i128) -> Result<(), Error> {
+        self.collateral_received = self.collateral_received
+            .checked_add(amount)
+            .ok_or(Error::BalanceUpdateOverflow)?;
+
+        Ok(())
     }
 
     /// Applies accounting effects when collateral is liquidated for a position.
     pub fn recalculate_from_collateral_liquidated(
         &mut self,
-        collateral_amount: &i128,
-        remaining_obligations: &i128,
-    ) {
-        self.collateral_liquidated += collateral_amount;
-        self.payment_obligations -= remaining_obligations;
+        collateral_amount: i128,
+        remaining_obligations: i128,
+    ) -> Result<(), Error> {
+        self.collateral_liquidated = self.collateral_liquidated
+            .checked_add(collateral_amount)
+            .ok_or(Error::BalanceUpdateOverflow)?;
+
+        self.payment_obligations = self.payment_obligations
+            .checked_sub(remaining_obligations)
+            .ok_or(Error::BalanceUpdateUnderflow)?;
+
+        Ok(())
     }
 
     /// Applies accounting effects when collateral is returned to provider.
-    pub fn recalculate_from_collateral_returned(&mut self, amount: &i128) {
-        self.collateral_returned += amount;
+    pub fn recalculate_from_collateral_returned(&mut self, amount: i128) -> Result<(), Error> {
+        self.collateral_returned = self.collateral_returned
+            .checked_add(amount)
+            .ok_or(Error::BalanceUpdateOverflow)?;
+
+        Ok(())
     }
 
     /// Applies accounting effects of one emergency payout.
@@ -105,28 +153,78 @@ impl ContractBalance {
     /// Payouts consume reserve first, then project balance for the remainder.
     pub fn recalculate_from_emergency_payment(
         &mut self,
-        amount: &i128,
-        remaining_obligations: &i128,
-    ) {
-        let reserve_to_use = if self.reserve >= *amount {
-            *amount
+        amount: i128,
+        remaining_obligations: i128,
+    ) -> Result<(), Error> {
+        let reserve_to_use = if self.reserve >= amount {
+            amount
         } else {
             self.reserve
         };
-        let project_to_use = *amount - reserve_to_use;
+        let project_to_use = amount - reserve_to_use;
 
-        self.reserve -= reserve_to_use;
-        self.project -= project_to_use;
-        self.payments += amount;
-        self.payment_obligations -= remaining_obligations;
+        self.reserve = self.reserve
+            .checked_sub(reserve_to_use)
+            .ok_or(Error::BalanceUpdateUnderflow)?;
+
+        self.project = self.project
+            .checked_sub(project_to_use)
+            .ok_or(Error::BalanceUpdateUnderflow)?;
+
+        self.payments = self.payments
+            .checked_add(amount)
+            .ok_or(Error::BalanceUpdateOverflow)?;
+
+        self.payment_obligations = self.payment_obligations
+            .checked_sub(remaining_obligations)
+            .ok_or(Error::BalanceUpdateUnderflow)?;
+
+        Ok(())
     }
 
     /// Applies accounting effects of investor refund.
-    pub fn recalculate_from_refunded_to_investor(&mut self, position: &Position) {
-        self.project -= position.deposited;
-        self.comission -= position.commission;
-        self.refunded_to_investor += position.deposited + position.commission;
-        self.payment_obligations -= position.total - position.paid;
+    pub fn recalculate_from_refunded_to_investor(&mut self, position: &Position) -> Result<(), Error> {
+        self.project = self.project
+            .checked_sub(position.deposited)
+            .ok_or(Error::BalanceUpdateUnderflow)?;
+
+        self.comission = self.comission
+            .checked_sub(position.commission)
+            .ok_or(Error::BalanceUpdateUnderflow)?;
+
+        let refunded_amount = position
+            .deposited
+            .checked_add(position.commission)
+            .ok_or(Error::BalanceUpdateOverflow)?;
+
+        self.refunded_to_investor = self.refunded_to_investor
+            .checked_add(refunded_amount)
+            .ok_or(Error::BalanceUpdateOverflow)?;
+
+        let obligations_to_sub = position
+            .total
+            .checked_sub(position.paid)
+            .ok_or(Error::BalanceUpdateUnderflow)?;
+
+        self.payment_obligations = self.payment_obligations
+            .checked_sub(obligations_to_sub)
+            .ok_or(Error::BalanceUpdateUnderflow)?;
+
+        Ok(())
+    }
+
+    pub fn reset_balance(&mut self) {
+        self.reserve = 0_i128;
+        self.project = 0_i128;
+        self.comission = 0_i128;
+        self.comission_withdrawal = 0_i128;
+        self.payments = 0_i128;
+        self.project_withdrawals = 0_i128;
+        self.payment_obligations = 0_i128;
+        self.collateral_received = 0_i128;
+        self.collateral_liquidated = 0_i128;
+        self.collateral_returned = 0_i128;
+        self.refunded_to_investor = 0_i128;
     }
 }
 
@@ -253,7 +351,7 @@ pub enum DataKey {
     LiquidateInvestmentEnabled
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 #[contracttype]
 pub enum LiquidateInvestmentsStatus {
     Enabled,
@@ -302,5 +400,10 @@ pub enum Error {
     PendingCommissionWithdrawal = 51,
     EmptyEmergencyPool = 52,
     PositionIdAlreadyExists = 53,
-    LiquidationPaymentsOutOfPeriod = 54
+    LiquidationPaymentsOutOfPeriod = 54,
+    PaymentsObligationsRemaining = 55,
+    BalanceUpdateOverflow = 56,
+    BalanceUpdateUnderflow = 57,
+    CollateralAmountOverflow = 58,
+    CollateralPriceOracleError = 59
 }
