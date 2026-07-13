@@ -5,13 +5,13 @@
 
 ## Overview
 
-Equillar is a Soroban smart contract for income-based financing on Stellar. It lets a project raise funds from multiple investors, represent each position as an NFT, and execute scheduled repayments on-chain with optional collateral and emergency settlement.
+Equillar is an investment lifecycle engine implemented as a modular Soroban smart contract on Stellar. It lets a project raise funds from multiple investors, represent each position as an NFT, and execute scheduled repayments on-chain with optional liquidation mode, collateral settlement, and emergency close-out flows.
 
 The current implementation follows a modular architecture with role-based access control:
 
 - `admin`: governance and privileged operations.
 - `operator`: allowed to create investments.
-- `company`: approved source/target addresses for treasury and collateral-provider flows.
+- `company`: approved source/target addresses for treasury, reserve, and collateral-provider flows.
 - `manager`: approved recipients for commission withdrawals.
 
 Core dependencies include OpenZeppelin Stellar ecosystem crates (`stellar-access`, `stellar-macros`, `stellar-tokens`) and Soroban SDK.
@@ -39,66 +39,75 @@ Main crate: `contracts/investment-income-based`
 src/
 ├── lib.rs
 ├── contract.rs
-├── interface.rs
 ├── constants.rs
 ├── investment/
 │   ├── mod.rs
 │   ├── allocation.rs
-│   ├── storage.rs
+│   ├── events.rs
 │   ├── types.rs
-│   └── events.rs
+│   └── validation.rs
 ├── payments/
 │   ├── mod.rs
-│   └── events.rs
+│   ├── events.rs
+│   ├── storage.rs
+│   └── validation.rs
 ├── treasury/
 │   ├── mod.rs
-│   └── events.rs
+│   ├── events.rs
+│   └── validation.rs
 ├── emergency/
 │   ├── mod.rs
+│   ├── events.rs
 │   ├── types.rs
-│   └── events.rs
+│   └── validation.rs
 ├── collateral/
 │   ├── mod.rs
-│   └── events.rs
+│   ├── events.rs
+│   ├── liquidation.rs
+│   ├── storage.rs
+│   ├── types.rs
+│   └── validation.rs
 ├── shared/
 │   ├── mod.rs
-│   ├── balance.rs
+│   ├── events.rs
+│   ├── oracle.rs
 │   ├── storage.rs
+│   ├── storage_helper.rs
 │   ├── token.rs
-│   ├── types.rs
-│   └── events.rs
+│   └── types.rs
 └── validation/
-    ├── mod.rs
-    ├── investment.rs
-    ├── payments.rs
-    ├── treasury.rs
-    ├── collateral.rs
-    └── emergency.rs
+    └── mod.rs
 ```
 
 ### Responsibilities by Module
 
-- `contract.rs`: external entrypoints, access checks, pause guards, and orchestration.
-- `interface.rs`: stable trait/API surface and generated client bindings.
+- `contract.rs`: external entrypoints, access checks, pause guards, role management, liquidation toggles, upgrade flow, and orchestration.
 - `investment/`: position creation, refunding, schedule logic, and allocation math.
-- `payments/`: regular round payment processing.
-- `treasury/`: company transfers, project withdrawals, and commission withdrawals.
+- `payments/`: regular round payment processing and company reserve transfers.
+- `treasury/`: project withdrawals and commission withdrawals.
 - `emergency/`: emergency-close activation and proportional payout flow.
 - `collateral/`: collateral deposit, valuation, liquidation, and return.
-- `shared/`: cross-domain state types, storage helpers, token client helpers, balance accounting, and common events.
-- `validation/`: reusable business-rule validations and canonical `Error` enum.
+- `shared/`: cross-domain state types, storage helpers, token/oracle helpers, accounting state, and common events.
+- `validation/`: reusable business-rule validations and the canonical `Error` enum.
 
 ## Constructor Parameters
 
+`__constructor(admin_addr, token_addr, price_oracle, investment_params)` initializes the contract.
+
 | Parameter | Type | Description |
 |---|---|---|
+| `token_addr` | `Address` | Token used for investments and payouts. |
+| `price_oracle` | `Address` | Oracle used for collateral valuation. |
 | `i_rate` | `u32` | Annual interest rate in basis points (for example, `500 = 5%`). Must be > 0. |
-| `fundraising_days` | `u64` | Fundraising window duration in days. |
 | `claim_block_days` | `u64` | Delay after fundraising before regular payments can start. |
+| `fundraising_days` | `u64` | Fundraising window duration in days. |
 | `goal` | `i128` | Maximum capital to raise. Must be > 0. |
 | `return_type` | `u32` | `1 = ReverseLoan`, `2 = Coupon`. |
 | `return_months` | `u32` | Number of payment rounds. Must be > 0. |
 | `min_per_investment` | `i128` | Minimum amount per investment. Must be > 0. |
+| `cmr_upper_divisor` | `u32` | Upper divisor used by the collateral/risk math. Must be > 0. |
+| `cmr_lower_divisor` | `u32` | Lower divisor used by the collateral/risk math. Must be > 0 and lower than `cmr_upper_divisor`. |
+| `cmr_reductor` | `i128` | Reduction factor used by the collateral/risk math. Must be > 0. |
 
 ## Public API (Current)
 
@@ -115,33 +124,38 @@ src/
 | `revoke_manager(manager)` | admin | Revokes manager role. |
 | `transfer_admin_role(new_admin)` | admin | Starts two-step admin transfer (time-limited acceptance). |
 | `accept_admin_transfer_role()` | admin-gated endpoint | Accepts pending admin transfer. |
+| `upgrade(new_wasm_hash)` | admin + paused | Replaces the contract WASM after pausing. |
 
 ### Investment Lifecycle
 
 | Function | Access | Purpose |
 |---|---|---|
-| `invest(addr, amount)` | role `operator` on `addr` | Accepts investment and mints NFT position. |
+| `invest(addr, amount, token_id)` | role `operator` on `addr` + not paused | Accepts investment and mints NFT position. |
 | `refund_investor(token_id)` | admin | Refunds investment during valid refund window. |
 | `process_investor_payment(token_id)` | admin | Executes one regular payment round for a position. |
+| `enable_investment_liquidations()` | admin | Enables liquidation-based processing during the allowed window. |
+| `disable_investment_liquidations()` | admin | Disables liquidation-based processing during the allowed window. |
+| `check_investment_liquidations(caller)` | admin or role holder | Returns the current liquidation mode. |
 
 ### Treasury and Balances
 
 | Function | Access | Purpose |
 |---|---|---|
-| `add_company_transfer(amount, from)` | admin + role `company` on `from` | Deposits company funds into reserve for next round. |
-| `withdrawn(amount, to)` | admin + role `company` on `to` | Withdraws project funds to company address. |
-| `withdrawn_commissions(to)` | admin + role `manager` on `to` | Withdraws accumulated commissions to manager address. |
+| `add_company_transfer(amount, from)` | role `company` on `from` + not paused | Deposits company funds into reserve for the next round. |
+| `withdrawn(amount, to)` | admin + role `company` on `to` + not paused | Withdraws project funds to company address. |
+| `withdrawn_commissions(to)` | admin + role `manager` on `to` + not paused | Withdraws accumulated commissions to manager address. |
+| `withdrawn_all(to)` | admin + role `manager` on `to` + not paused | Withdraws all remaining token balance when obligations are zero. |
 | `get_contract_balance(caller)` | caller must be admin or hold any role | Returns `ContractBalance` snapshot. |
 
 ### Emergency and Collateral
 
 | Function | Access | Purpose |
 |---|---|---|
-| `activate_emergency_close()` | admin | Freezes emergency pool and transitions to emergency settlement. |
-| `emergency_pay_investor(token_id)` | admin | Pays one investor proportionally from emergency pool. |
-| `add_collateral(token, amount, symbol, collateral_addr)` | admin + role `company` on `collateral_addr` | Deposits collateral and updates tracked collateral state. |
-| `pay_with_collateral(token_id)` | admin | Settles a position using collateral pool. |
-| `return_collateral_to_company()` | admin | Returns remaining collateral to provider. |
+| `activate_emergency_close()` | admin + not paused | Freezes emergency pool and transitions to emergency settlement. |
+| `emergency_pay_investor(token_id)` | admin + not paused | Pays one investor proportionally from emergency pool. |
+| `add_collateral(token, amount, symbol, collateral_addr)` | role `company` on `collateral_addr` + not paused | Deposits collateral and updates tracked collateral state. |
+| `pay_with_collateral(token_id)` | admin + not paused | Settles a position using collateral pool. |
+| `return_collateral_to_company()` | admin + not paused | Returns remaining collateral to provider. |
 
 ### Pause Control
 
@@ -186,8 +200,8 @@ cargo build
 stellar contract build
 ```
 
-For deployment on testnet, see Stellar docs:
-https://developers.stellar.org/docs/build/smart-contracts/getting-started/deploy-to-testnet
+For deployment on testnet, see Equillar docs:
+https://docs.equillar.com
 
 ## License
 
