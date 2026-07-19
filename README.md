@@ -5,7 +5,7 @@
 
 ## Overview
 
-Equillar is an investment lifecycle engine implemented as a modular Soroban smart contract on Stellar. It lets a project raise funds from multiple investors, represent each position as an NFT, and execute scheduled repayments on-chain with optional liquidation mode, collateral settlement, and emergency close-out flows.
+Equillar is an investment lifecycle engine implemented as a modular Soroban smart contract on Stellar. It lets a project raise funds from multiple investors, track each position, and execute scheduled repayments on-chain with optional liquidation mode, collateral settlement, and emergency close-out flows.
 
 The current implementation follows a modular architecture with role-based access control:
 
