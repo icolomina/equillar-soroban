@@ -19,7 +19,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Fix ed25519-dalek dependency conflict
-      run: cargo update -p ed25519-dalek@3.0.0 --precise 2.2.0
+      run: |
+        cargo generate-lockfile 
+        cargo update -p ed25519-dalek@3.0.0 --precise 2.2.0
+    - name: Fmt
+      run: cargo fmt --all -- --check
+    - name: Clippy
+      run: cargo clippy --verbose
     - name: Build
       run: cargo build --verbose
     - name: Run tests

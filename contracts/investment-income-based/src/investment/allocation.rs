@@ -14,9 +14,9 @@ fn calculate_rate_denominator(
     amount: &i128,
     cmr_upper_divisor: u32,
     cmr_lower_divisor: u32,
-    cmr_reductor: &i128
+    cmr_reductor: &i128,
 ) -> u32 {
-    let step = amount / cmr_reductor; 
+    let step = amount / cmr_reductor;
 
     if step > cmr_upper_divisor as i128 {
         return cmr_upper_divisor;
@@ -52,7 +52,7 @@ fn get_deposit_allocation(
     let returns_wad = amount_to_invest_wad * return_rate_wad;
 
     let commission = amount_to_commission_wad.to_token_amount(env, decimals_for_wad);
-    let deposited = *amount - commission; // 
+    let deposited = *amount - commission; //
     let returns = returns_wad.to_token_amount(env, decimals_for_wad);
 
     DepositAllocation {

@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, contracterror, Address, Env};
+use soroban_sdk::{contracterror, contracttype, Address, Env};
 
 use crate::constants::SECONDS_IN_DAY;
 
@@ -27,8 +27,6 @@ impl Default for ContractBalance {
     }
 }
 
-
-
 impl ContractBalance {
     /// Creates a zero-initialized balance snapshot.
     pub fn new() -> Self {
@@ -48,17 +46,17 @@ impl ContractBalance {
     }
 
     /// Applies accounting effects of a newly accepted investment.
-    pub fn recalculate_from_position(
-        &mut self,
-        position: &Position,
-    ) -> Result<(), Error>  {
-        self.comission = self.comission
+    pub fn recalculate_from_position(&mut self, position: &Position) -> Result<(), Error> {
+        self.comission = self
+            .comission
             .checked_add(position.commission)
             .ok_or(Error::BalanceUpdateOverflow)?;
-        self.project = self.project
+        self.project = self
+            .project
             .checked_add(position.deposited)
             .ok_or(Error::BalanceUpdateOverflow)?;
-        self.payment_obligations = self.payment_obligations
+        self.payment_obligations = self
+            .payment_obligations
             .checked_add(position.total)
             .ok_or(Error::BalanceUpdateOverflow)?;
 
@@ -67,15 +65,18 @@ impl ContractBalance {
 
     /// Applies accounting effects of a regular investor payment.
     pub fn recalculate_from_payment_to_investor(&mut self, amount: i128) -> Result<(), Error> {
-        self.reserve = self.reserve
+        self.reserve = self
+            .reserve
             .checked_sub(amount)
             .ok_or(Error::BalanceUpdateUnderflow)?;
 
-        self.payments = self.payments
+        self.payments = self
+            .payments
             .checked_add(amount)
             .ok_or(Error::BalanceUpdateOverflow)?;
 
-        self.payment_obligations = self.payment_obligations
+        self.payment_obligations = self
+            .payment_obligations
             .checked_sub(amount)
             .ok_or(Error::BalanceUpdateOverflow)?;
 
@@ -84,7 +85,8 @@ impl ContractBalance {
 
     /// Applies accounting effects of a company transfer into reserve.
     pub fn recalculate_from_company_contribution(&mut self, amount: i128) -> Result<(), Error> {
-        self.reserve = self.reserve
+        self.reserve = self
+            .reserve
             .checked_add(amount)
             .ok_or(Error::BalanceUpdateOverflow)?;
 
@@ -93,11 +95,13 @@ impl ContractBalance {
 
     /// Applies accounting effects of withdrawing project funds.
     pub fn recalculate_from_company_withdrawal(&mut self, amount: i128) -> Result<(), Error> {
-        self.project = self.project
+        self.project = self
+            .project
             .checked_sub(amount)
             .ok_or(Error::BalanceUpdateUnderflow)?;
 
-        self.project_withdrawals = self.project_withdrawals
+        self.project_withdrawals = self
+            .project_withdrawals
             .checked_add(amount)
             .ok_or(Error::BalanceUpdateOverflow)?;
 
@@ -106,7 +110,8 @@ impl ContractBalance {
 
     /// Applies accounting effects of commission withdrawal.
     pub fn recalculate_from_comission_withdrawal(&mut self, amount: i128) -> Result<(), Error> {
-        self.comission_withdrawal = self.comission_withdrawal
+        self.comission_withdrawal = self
+            .comission_withdrawal
             .checked_add(amount)
             .ok_or(Error::BalanceUpdateOverflow)?;
 
@@ -115,7 +120,8 @@ impl ContractBalance {
 
     /// Applies accounting effects of collateral deposit reception.
     pub fn recalculate_from_collateral_received(&mut self, amount: i128) -> Result<(), Error> {
-        self.collateral_received = self.collateral_received
+        self.collateral_received = self
+            .collateral_received
             .checked_add(amount)
             .ok_or(Error::BalanceUpdateOverflow)?;
 
@@ -128,11 +134,13 @@ impl ContractBalance {
         collateral_amount: i128,
         remaining_obligations: i128,
     ) -> Result<(), Error> {
-        self.collateral_liquidated = self.collateral_liquidated
+        self.collateral_liquidated = self
+            .collateral_liquidated
             .checked_add(collateral_amount)
             .ok_or(Error::BalanceUpdateOverflow)?;
 
-        self.payment_obligations = self.payment_obligations
+        self.payment_obligations = self
+            .payment_obligations
             .checked_sub(remaining_obligations)
             .ok_or(Error::BalanceUpdateUnderflow)?;
 
@@ -141,7 +149,8 @@ impl ContractBalance {
 
     /// Applies accounting effects when collateral is returned to provider.
     pub fn recalculate_from_collateral_returned(&mut self, amount: i128) -> Result<(), Error> {
-        self.collateral_returned = self.collateral_returned
+        self.collateral_returned = self
+            .collateral_returned
             .checked_add(amount)
             .ok_or(Error::BalanceUpdateOverflow)?;
 
@@ -163,19 +172,23 @@ impl ContractBalance {
         };
         let project_to_use = amount - reserve_to_use;
 
-        self.reserve = self.reserve
+        self.reserve = self
+            .reserve
             .checked_sub(reserve_to_use)
             .ok_or(Error::BalanceUpdateUnderflow)?;
 
-        self.project = self.project
+        self.project = self
+            .project
             .checked_sub(project_to_use)
             .ok_or(Error::BalanceUpdateUnderflow)?;
 
-        self.payments = self.payments
+        self.payments = self
+            .payments
             .checked_add(amount)
             .ok_or(Error::BalanceUpdateOverflow)?;
 
-        self.payment_obligations = self.payment_obligations
+        self.payment_obligations = self
+            .payment_obligations
             .checked_sub(remaining_obligations)
             .ok_or(Error::BalanceUpdateUnderflow)?;
 
@@ -183,12 +196,17 @@ impl ContractBalance {
     }
 
     /// Applies accounting effects of investor refund.
-    pub fn recalculate_from_refunded_to_investor(&mut self, position: &Position) -> Result<(), Error> {
-        self.project = self.project
+    pub fn recalculate_from_refunded_to_investor(
+        &mut self,
+        position: &Position,
+    ) -> Result<(), Error> {
+        self.project = self
+            .project
             .checked_sub(position.deposited)
             .ok_or(Error::BalanceUpdateUnderflow)?;
 
-        self.comission = self.comission
+        self.comission = self
+            .comission
             .checked_sub(position.commission)
             .ok_or(Error::BalanceUpdateUnderflow)?;
 
@@ -197,7 +215,8 @@ impl ContractBalance {
             .checked_add(position.commission)
             .ok_or(Error::BalanceUpdateOverflow)?;
 
-        self.refunded_to_investor = self.refunded_to_investor
+        self.refunded_to_investor = self
+            .refunded_to_investor
             .checked_add(refunded_amount)
             .ok_or(Error::BalanceUpdateOverflow)?;
 
@@ -206,7 +225,8 @@ impl ContractBalance {
             .checked_sub(position.paid)
             .ok_or(Error::BalanceUpdateUnderflow)?;
 
-        self.payment_obligations = self.payment_obligations
+        self.payment_obligations = self
+            .payment_obligations
             .checked_sub(obligations_to_sub)
             .ok_or(Error::BalanceUpdateUnderflow)?;
 
@@ -240,7 +260,7 @@ pub struct InvestmentContractParams {
     pub min_per_investment: i128,
     pub cmr_upper_divisor: u32,
     pub cmr_lower_divisor: u32,
-    pub cmr_reductor: i128
+    pub cmr_reductor: i128,
 }
 
 /// Persisted immutable/semi-immutable configuration used across business flows.
@@ -260,7 +280,7 @@ pub struct ContractData {
     pub amount_to_pay_per_month: i128,
     pub cmr_upper_divisor: u32,
     pub cmr_lower_divisor: u32,
-    pub cmr_reductor: i128
+    pub cmr_reductor: i128,
 }
 
 impl ContractData {
@@ -274,7 +294,8 @@ impl ContractData {
         token: Address,
         price_oracle: Address,
     ) -> Self {
-        let ts_fundraising_ends = env.ledger().timestamp() + (params.fundraising_days * SECONDS_IN_DAY);
+        let ts_fundraising_ends =
+            env.ledger().timestamp() + (params.fundraising_days * SECONDS_IN_DAY);
         let ts_payments_start = ts_fundraising_ends + (params.claim_block_days * SECONDS_IN_DAY);
 
         Self {
@@ -292,7 +313,7 @@ impl ContractData {
             amount_to_pay_per_month: 0,
             cmr_upper_divisor: params.cmr_upper_divisor,
             cmr_lower_divisor: params.cmr_lower_divisor,
-            cmr_reductor: params.cmr_reductor
+            cmr_reductor: params.cmr_reductor,
         }
     }
 }
@@ -334,8 +355,6 @@ impl PositionReturnType {
     }
 }
 
-
-
 #[derive(Clone)]
 #[contracttype]
 /// Instance-storage keys used by contract state.
@@ -348,14 +367,14 @@ pub enum DataKey {
     EmergencyCloseState,
     Collateral,
     PositionIdAddress(u32),
-    LiquidateInvestmentEnabled
+    LiquidateInvestmentEnabled,
 }
 
 #[derive(Clone, PartialEq, Debug)]
 #[contracttype]
 pub enum LiquidateInvestmentsStatus {
     Enabled,
-    Disabled
+    Disabled,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -405,5 +424,5 @@ pub enum Error {
     BalanceUpdateOverflow = 56,
     BalanceUpdateUnderflow = 57,
     CollateralAmountOverflow = 58,
-    CollateralPriceOracleError = 59
+    CollateralPriceOracleError = 59,
 }

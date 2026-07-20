@@ -23,4 +23,3 @@ pub fn bump_persistent_ttl(env: &Env, key: &DataKey) {
         PERSISTENT_BUMP_AMOUNT,
     );
 }
-

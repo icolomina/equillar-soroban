@@ -1,6 +1,5 @@
 use soroban_sdk::{contracttype, Address, String};
 
-
 #[contracttype]
 #[derive(Clone)]
 pub(super) struct Collateral {

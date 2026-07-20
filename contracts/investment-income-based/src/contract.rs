@@ -27,7 +27,7 @@ pub struct InvestmentContract;
 /// This helper is intentionally strict and panics if admin was not initialized,
 /// because all sensitive flows depend on constructor initialization.
 fn admin(env: &Env) -> Address {
-    access_control::get_admin(&env).unwrap()
+    access_control::get_admin(env).unwrap()
 }
 
 /// Requires authentication for callers that are either:
@@ -40,14 +40,14 @@ fn admin(env: &Env) -> Address {
 /// # Panics
 /// Panics when `caller` is neither admin nor role holder.
 fn require_admin_or_any_role(env: &Env, caller: &Address) {
-    let is_admin = *caller == admin(&env);
+    let is_admin = *caller == admin(env);
 
     if is_admin {
         caller.require_auth();
         return;
     }
 
-    for role in access_control::get_existing_roles(&env) {
+    for role in access_control::get_existing_roles(env) {
         if access_control::has_role(env, caller, &role).is_some() {
             caller.require_auth();
             return;
@@ -185,10 +185,7 @@ impl InvestmentContract {
     /// # Access Control
     /// - Admin only.
     ///
-    pub fn check_investment_liquidations(
-        env: Env,
-        caller: Address,
-    ) -> Result<LiquidateInvestmentsStatus, Error> {
+    pub fn check_investment_liquidations(env: Env, caller: Address) -> LiquidateInvestmentsStatus {
         require_admin_or_any_role(&env, &caller);
         payments::check_investment_liquidations(&env)
     }
@@ -342,7 +339,7 @@ impl InvestmentContract {
     #[only_admin]
     #[has_role(to, "company")]
     pub fn withdrawn(env: Env, amount: i128, to: Address) -> Result<(), Error> {
-        treasury::withdrawn(&env, amount, to)
+        treasury::withdrawn(&env, amount, &to)
     }
 
     /// Withdraws accumulated commissions to `to`.
@@ -355,7 +352,7 @@ impl InvestmentContract {
     #[only_admin]
     #[has_role(to, "manager")]
     pub fn withdrawn_commissions(env: Env, to: Address) -> Result<i128, Error> {
-        treasury::withdrawn_commissions(&env, to)
+        treasury::withdrawn_commissions(&env, &to)
     }
 
     /// Withdraws accumulated commissions to `to`.
@@ -368,7 +365,7 @@ impl InvestmentContract {
     #[only_admin]
     #[has_role(to, "manager")]
     pub fn withdrawn_all(env: Env, to: Address) -> Result<i128, Error> {
-        treasury::withdrawn_all(&env, to)
+        treasury::withdrawn_all(&env, &to)
     }
 
     /// Registers an inbound transfer from a company address for next payment round.
@@ -380,7 +377,7 @@ impl InvestmentContract {
     #[when_not_paused]
     #[only_role(from, "company")]
     pub fn add_company_transfer(env: Env, amount: i128, from: Address) -> Result<bool, Error> {
-        payments::add_company_transfer(&env, from, amount)
+        payments::add_company_transfer(&env, &from, amount)
     }
 
     /// Freezes contract into emergency mode and snapshots distributable pool.
@@ -409,7 +406,7 @@ impl InvestmentContract {
     ///
     /// # Access Control
     /// - Contract must not be paused.
-    /// - `collateral_addr` must sign the trx 
+    /// - `collateral_addr` must sign the trx
     /// - `collateral_addr` must hold `company` role.
     #[when_not_paused]
     #[only_role(collateral_addr, "company")]

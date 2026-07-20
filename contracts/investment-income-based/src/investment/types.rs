@@ -23,13 +23,12 @@ pub struct Investment {
 pub struct DepositAllocation {
     pub commission: i128,
     pub returns: i128,
-    pub deposited: i128
+    pub deposited: i128,
 }
 
 impl DepositAllocation {
     pub fn get_total_claimable(self) -> i128 {
-        let total = self.deposited + self.returns;
-        total
+        self.deposited + self.returns
     }
 }
 

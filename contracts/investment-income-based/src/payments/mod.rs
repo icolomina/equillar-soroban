@@ -5,32 +5,30 @@ mod validation;
 use soroban_sdk::{Address, Env};
 
 use crate::shared;
-use crate::shared::types::{LiquidateInvestmentsStatus, Position, PositionReturnType, Error};
+use crate::shared::types::{Error, LiquidateInvestmentsStatus, Position, PositionReturnType};
 use crate::validation::{self as shared_validation};
 
 fn update_position_for_payment_round(
     position: &mut Position,
-    return_type: &PositionReturnType,
+    return_type: PositionReturnType,
     return_months: u32,
 ) -> i128 {
-
     let total = match return_type {
         PositionReturnType::Coupon => position.returns,
         PositionReturnType::ReverseLoan => position.total,
     };
-    
+
     let mut amount_to_transfer: i128;
     position.payments_transferred += 1;
 
     if position.payments_transferred >= return_months {
         position.completed = true;
         amount_to_transfer = total - position.paid;
-    
-        if *return_type == PositionReturnType::Coupon {
+
+        if return_type == PositionReturnType::Coupon {
             amount_to_transfer += position.deposited;
         }
-    }
-    else {
+    } else {
         amount_to_transfer = position.regular_payment;
     }
 
@@ -43,7 +41,7 @@ fn update_position_for_payment_round(
 /// Validates payment timing/state, computes amount due, transfers funds to the
 /// investment owner, and updates investment plus global accounting state.
 ///
-/// Note: If LiquidateInvestmentEnabled key is not enabled, this function updates the position but
+/// Note: If `LiquidateInvestmentEnabled` key is not enabled, this function updates the position but
 /// does not check reserve neither transfer the payment. It is assumed that payment will be sent in other ways
 /// chosen by the integrator
 ///
@@ -67,11 +65,11 @@ pub(crate) fn process_investor_payment(env: &Env, position_id: u32) -> Result<Po
     let next_payment_round = storage::get_next_payment_round(env);
     let amount_to_transfer = update_position_for_payment_round(
         &mut position,
-        &contract_data.return_type,
+        contract_data.return_type,
         contract_data.return_months,
     );
 
-    if LiquidateInvestmentsStatus::Enabled == storage::liquidate_investments_enabled(&env) {
+    if LiquidateInvestmentsStatus::Enabled == storage::liquidate_investments_enabled(env) {
         validation::validate_reserve_balance(
             amount_to_transfer,
             &position,
@@ -102,7 +100,7 @@ pub(crate) fn process_investor_payment(env: &Env, position_id: u32) -> Result<Po
 ///
 /// # Errors
 /// Returns company-transfer validation errors and transfer failures.
-pub(crate) fn add_company_transfer(env: &Env, from: Address, amount: i128) -> Result<bool, Error> {
+pub(crate) fn add_company_transfer(env: &Env, from: &Address, amount: i128) -> Result<bool, Error> {
     let contract_data = shared::storage::get_contract_data(env);
     shared_validation::validate_not_in_emergency(shared::storage::get_emergency_close_state(env))?;
 
@@ -113,7 +111,7 @@ pub(crate) fn add_company_transfer(env: &Env, from: Address, amount: i128) -> Re
     validation::validate_company_transfer(
         env,
         &token,
-        &from,
+        from,
         &contract_data,
         &contract_balance,
         amount,
@@ -121,7 +119,7 @@ pub(crate) fn add_company_transfer(env: &Env, from: Address, amount: i128) -> Re
     )?;
 
     token
-        .try_transfer(&from, &env.current_contract_address(), &amount)
+        .try_transfer(from, env.current_contract_address(), &amount)
         .map_err(|_| Error::RecipientCannotReceivePayment)?
         .map_err(|_| Error::InvalidPaymentData)?;
 
@@ -141,7 +139,7 @@ pub(crate) fn enable_liquidate_investments(env: &Env) -> Result<(), Error> {
         contract_data.ts_fundraising_ends,
         contract_data.ts_payments_start,
     )?;
-    storage::enable_liquidate_investments(&env);
+    storage::enable_liquidate_investments(env);
     Ok(())
 }
 
@@ -152,13 +150,11 @@ pub(crate) fn disable_liquidate_investments(env: &Env) -> Result<(), Error> {
         contract_data.ts_fundraising_ends,
         contract_data.ts_payments_start,
     )?;
-    storage::disable_liquidate_investments(&env);
+    storage::disable_liquidate_investments(env);
     Ok(())
 }
 
-pub(crate) fn check_investment_liquidations(
-    env: &Env,
-) -> Result<LiquidateInvestmentsStatus, Error> {
+pub(crate) fn check_investment_liquidations(env: &Env) -> LiquidateInvestmentsStatus {
     let status: LiquidateInvestmentsStatus =
         if storage::liquidate_investments_enabled(env) == LiquidateInvestmentsStatus::Enabled {
             LiquidateInvestmentsStatus::Enabled
@@ -166,5 +162,5 @@ pub(crate) fn check_investment_liquidations(
             LiquidateInvestmentsStatus::Disabled
         };
 
-    Ok(status)
+    status
 }

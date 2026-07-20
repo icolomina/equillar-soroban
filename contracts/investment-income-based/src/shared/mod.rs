@@ -4,8 +4,8 @@
 //! and events so business modules can compose consistent state transitions.
 
 pub mod events;
+pub mod oracle;
 pub mod storage;
 pub mod storage_helper;
 pub mod token;
 pub mod types;
-pub mod oracle;

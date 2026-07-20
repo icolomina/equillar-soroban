@@ -174,6 +174,23 @@ tests/
 └── error_tests.rs
 ```
 
+### Known issue: `ed25519-dalek` version conflict on `cargo test`
+
+When running `cargo test`, dependency resolution can fail with a version
+conflict on `ed25519-dalek`. This happens because `soroban-sdk`'s
+`testutils` feature (enabled under `[dev-dependencies]`) pulls in a
+version of `ed25519-dalek` that conflicts with the one resolved for the
+main build.
+
+**Fix:** regenerate the lockfile and pin the conflicting version before
+running tests:
+
+```bash
+cargo generate-lockfile
+cargo update -p ed25519-dalek@3.0.0 --precise 2.2.0
+cargo test
+```
+
 Run all tests:
 
 ```bash
