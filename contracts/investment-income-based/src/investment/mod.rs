@@ -27,9 +27,7 @@ pub fn invest(
         return Err(Error::PositionIdAlreadyExists);
     }
 
-    shared_validation::validate_not_in_emergency(
-        shared::storage::get_emergency_close_state(env),
-    )?;
+    shared_validation::validate_not_in_emergency(shared::storage::get_emergency_close_state(env))?;
 
     let mut contract_data = shared::storage::get_contract_data(env);
     let token = shared::token::get_token(env, &contract_data);
@@ -44,7 +42,7 @@ pub fn invest(
     )?;
 
     token
-        .try_transfer(investor, &env.current_contract_address(), &amount)
+        .try_transfer(investor, env.current_contract_address(), &amount)
         .map_err(|_| Error::RecipientCannotReceivePayment)?
         .map_err(|_| Error::InvalidPaymentData)?;
 

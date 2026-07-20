@@ -1,5 +1,5 @@
-use crate::shared::types::{ContractData, Error};
 use crate::require;
+use crate::shared::types::{ContractData, Error};
 
 pub fn validate_withdrawal(
     amount: i128,

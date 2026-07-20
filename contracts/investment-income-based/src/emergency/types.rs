@@ -1,6 +1,6 @@
 use soroban_sdk::contracttype;
 
-use crate::shared::types::{Position, ContractBalance};
+use crate::shared::types::{ContractBalance, Position};
 
 /// Snapshot of pool/obligations used during emergency-close settlement.
 #[contracttype]

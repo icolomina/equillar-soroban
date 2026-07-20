@@ -12,10 +12,7 @@ use token::Client as TokenClient;
 use token::StellarAssetClient as TokenAdminClient;
 
 pub mod reflector {
-    use investment_income_based::shared::oracle::{
-        Asset,
-        PriceData, ReflectorOracle,
-    };
+    use investment_income_based::shared::oracle::{Asset, PriceData, ReflectorOracle};
     use soroban_sdk::{contract, contractimpl, contracttype, Symbol};
 
     use super::*;
@@ -44,22 +41,18 @@ pub mod reflector {
                 env.storage().instance().get(&DataKey::ContractToken);
 
             match asset {
-                Asset::Stellar(addr) if contract_token.as_ref() == Some(&addr) => {
-                    Some(PriceData {
-                        price: 1_i128,
-                        timestamp: 65_587_445_447_u64,
-                    })
-                }
+                Asset::Stellar(addr) if contract_token.as_ref() == Some(&addr) => Some(PriceData {
+                    price: 1_i128,
+                    timestamp: 65_587_445_447_u64,
+                }),
                 Asset::Stellar(_) => Some(PriceData {
                     price: 60000_i128,
                     timestamp: 65_587_445_447_u64,
                 }),
-                Asset::Other(symbol) if symbol == Symbol::new(env, "BTC") => {
-                    Some(PriceData {
-                        price: 60000_i128,
-                        timestamp: 65_587_445_447_u64,
-                    })
-                }
+                Asset::Other(symbol) if symbol == Symbol::new(env, "BTC") => Some(PriceData {
+                    price: 60000_i128,
+                    timestamp: 65_587_445_447_u64,
+                }),
                 Asset::Other(_) => Some(PriceData {
                     price: 1_i128,
                     timestamp: 65_587_445_447_u64,

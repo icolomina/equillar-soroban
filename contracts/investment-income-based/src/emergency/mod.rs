@@ -1,6 +1,6 @@
 mod events;
 mod types;
-mod validation; 
+mod validation;
 
 use soroban_sdk::Env;
 
@@ -32,7 +32,7 @@ pub(crate) fn activate_emergency_close(env: &Env) -> Result<bool, Error> {
     events::emit_emergency_close_activated(
         env,
         emergency_state.emergency_pool_total,
-        emergency_state.emergency_obligations_left
+        emergency_state.emergency_obligations_left,
     );
 
     Ok(true)
@@ -49,26 +49,28 @@ pub(crate) fn activate_emergency_close(env: &Env) -> Result<bool, Error> {
 pub(crate) fn emergency_pay_investor(env: &Env, position_id: u32) -> Result<i128, Error> {
     let contract_data = shared::storage::get_contract_data(env);
 
-    let mut position = shared::storage::get_position(env, position_id).ok_or(Error::AddressHasNotInvested)?;
+    let mut position =
+        shared::storage::get_position(env, position_id).ok_or(Error::AddressHasNotInvested)?;
     let mut contract_balance = shared::storage::get_balances_or_new(env);
-    let mut emergency_state = shared::storage::get_emergency_close_state(env)
-        .ok_or(Error::EmergencyNotActive)?;
+    let mut emergency_state =
+        shared::storage::get_emergency_close_state(env).ok_or(Error::EmergencyNotActive)?;
 
-    validation::validate_emergency_payment(
-        &position,
-        &contract_balance,
-        &emergency_state,
-    )?;
+    validation::validate_emergency_payment(&position, &contract_balance, &emergency_state)?;
 
     let remaining_obligations = position.total - position.paid;
     let amount_to_pay = emergency_state.calculate_amount_to_pay(&position);
 
-    let token_owner = shared::storage::get_addr_position_id(env, position_id).ok_or(Error::AddressHasNotInvested)?;
+    let token_owner = shared::storage::get_addr_position_id(env, position_id)
+        .ok_or(Error::AddressHasNotInvested)?;
     let token = shared::token::get_token(env, &contract_data);
 
     if amount_to_pay > 0 {
         token
-            .try_transfer(&env.current_contract_address(), &token_owner, &amount_to_pay)
+            .try_transfer(
+                &env.current_contract_address(),
+                &token_owner,
+                &amount_to_pay,
+            )
             .map_err(|_| Error::RecipientCannotReceivePayment)?
             .map_err(|_| Error::InvalidPaymentData)?;
     }

@@ -35,14 +35,14 @@ pub(super) fn emit_collateral_deposited(
     current_collateral_amount: i128,
     total_deposited: i128,
     token_collateral_address: &Address,
-    token_collateral_symbol: &String
+    token_collateral_symbol: &String,
 ) {
     CollateralDeposited {
         addr: env.current_contract_address(),
         current_collateral_amount,
         total_deposited,
-        token_address: &token_collateral_address,
-        token_symbol: &token_collateral_symbol,
+        token_address: token_collateral_address,
+        token_symbol: token_collateral_symbol,
     }
     .publish(env);
 }
