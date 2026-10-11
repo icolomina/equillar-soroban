@@ -5,9 +5,11 @@ pub use investment_income_based::{
     contract::InvestmentContract, shared::types::InvestmentContractParams, shared::types::Position,
 };
 use soroban_sdk::{
+    symbol_short,
     testutils::{Address as _, Ledger},
     token, Address, Env,
 };
+use stellar_access::access_control;
 use token::Client as TokenClient;
 use token::StellarAssetClient as TokenAdminClient;
 
@@ -206,12 +208,46 @@ pub fn do_payment_round_without_company_transfer(
     position
 }
 
+/// Invests as `addr`, granting it the `operator` role first unless it already
+/// holds it (re-granting the same address fails with `AddressAlreadyHoldsRole`).
 pub fn invest_as_operator(
     test_data: &TestData,
     addr: &Address,
     amount: &i128,
     token_id: &u32,
 ) -> Position {
-    test_data.client.grant_operator(addr);
+    let env = &test_data.client.env;
+    let operator_role = symbol_short!("operator");
+
+    // Storage reads must run inside the contract context.
+    let already_operator = env.as_contract(&test_data.client.address, || {
+        access_control::has_role(env, addr, &operator_role).is_some()
+    });
+
+    if !already_operator {
+        test_data.client.grant_operator(addr);
+    }
+
     test_data.client.invest(addr, amount, token_id)
+}
+
+/// Grants the single-holder `company` role to `addr`, revoking the current
+/// holder first when the slot is already taken.
+pub fn grant_company_exclusive(test_data: &TestData, addr: &Address) {
+    let env = &test_data.client.env;
+    let company_role = symbol_short!("company");
+
+    // Storage reads must run inside the contract context.
+    let current_holder = env.as_contract(&test_data.client.address, || {
+        if access_control::get_role_member_count(env, &company_role) > 0 {
+            Some(access_control::get_role_member(env, &company_role, 0))
+        } else {
+            None
+        }
+    });
+
+    if let Some(holder) = current_holder {
+        test_data.client.revoke_company(&holder);
+    }
+    test_data.client.grant_company(addr);
 }

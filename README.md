@@ -16,6 +16,11 @@ The current implementation follows a modular architecture with role-based access
 
 Core dependencies include OpenZeppelin Stellar ecosystem crates (`stellar-access`, `stellar-macros`, `stellar-tokens`) and Soroban SDK.
 
+> **Note:** `stellar-contract-utils`, `stellar-access` and `stellar-macros` are currently imported from the
+> [OpenZeppelin/stellar-contracts](https://github.com/OpenZeppelin/stellar-contracts) GitHub repository at a fixed
+> commit (`rev` in the workspace `Cargo.toml`), because the crates.io releases do not yet support Soroban SDK 28.
+> Once OpenZeppelin publishes a release for Soroban SDK 28, switch them back to crates.io versions.
+
 ## Monorepo Structure
 
 ```text
@@ -172,23 +177,6 @@ tests/
 ├── common/mod.rs
 ├── success_tests.rs
 └── error_tests.rs
-```
-
-### Known issue: `ed25519-dalek` version conflict on `cargo test`
-
-When running `cargo test`, dependency resolution can fail with a version
-conflict on `ed25519-dalek`. This happens because `soroban-sdk`'s
-`testutils` feature (enabled under `[dev-dependencies]`) pulls in a
-version of `ed25519-dalek` that conflicts with the one resolved for the
-main build.
-
-**Fix:** regenerate the lockfile and pin the conflicting version before
-running tests:
-
-```bash
-cargo generate-lockfile
-cargo update -p ed25519-dalek@3.0.0 --precise 2.2.0
-cargo test
 ```
 
 Run all tests:

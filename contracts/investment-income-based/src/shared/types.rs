@@ -398,6 +398,8 @@ pub enum Error {
     CmrReductorMustBeGreaterThanZero = 13,
     AddressHasNotInvested = 14,
     CmrUpperDivisorMustBeGreaterTheCmrLowerDivisor = 15,
+    AddressAlreadyHoldsRole = 16,
+    AddressRoleAlreadyExists = 17,
     RecipientCannotReceivePayment = 28,
     InvalidPaymentData = 29,
     GoalReached = 30,

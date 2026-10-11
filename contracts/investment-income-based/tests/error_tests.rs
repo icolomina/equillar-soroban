@@ -1,6 +1,6 @@
 mod common;
 
-use common::{create_investment_contract, invest_as_operator};
+use common::{create_investment_contract, grant_company_exclusive, invest_as_operator};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env, String,
@@ -532,7 +532,7 @@ fn test_add_collateral_insufficient_balance() {
 
     let collateral_addr = Address::generate(&env);
     let (token_collateral, _token_collateral_admin) = create_token_contract(&env, &test_data.admin);
-    test_data.client.grant_company(&collateral_addr);
+    grant_company_exclusive(&test_data, &collateral_addr);
 
     test_data.client.add_collateral(
         &token_collateral.address,
@@ -596,7 +596,7 @@ fn test_add_collateral_only_one_collateral_token_allowed() {
     let (token_collateral, token_collateral_admin) = create_token_contract(&env, &test_data.admin);
     let (token_collateral_2, token_collateral_admin_2) =
         create_token_contract(&env, &test_data.admin);
-    test_data.client.grant_company(&collateral_addr);
+    grant_company_exclusive(&test_data, &collateral_addr);
     token_collateral_admin.mint(&collateral_addr, &200_i128);
     token_collateral_admin_2.mint(&collateral_addr, &200_i128);
     test_data.token_admin.mint(&test_data.user, &150_i128);
@@ -662,7 +662,7 @@ fn test_return_collateral_when_empty() {
 
     let collateral_addr = Address::generate(&env);
     let (token_collateral, token_collateral_admin) = create_token_contract(&env, &test_data.admin);
-    test_data.client.grant_company(&collateral_addr);
+    grant_company_exclusive(&test_data, &collateral_addr);
     token_collateral_admin.mint(&collateral_addr, &200_i128);
 
     test_data.token_admin.mint(&test_data.user, &150000_i128);
@@ -1044,4 +1044,130 @@ fn test_invest_blocked_in_emergency() {
     test_data.client.activate_emergency_close();
 
     invest_as_operator(&test_data, &late_investor, &1000, &1235_u32);
+}
+
+/// Granting `operator` to an address that already holds it must fail with
+/// `AddressAlreadyHoldsRole` (#16).
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #16)")]
+fn test_grant_operator_already_holds_role() {
+    let env = Env::default();
+    let test_data = create_investment_contract(
+        &env,
+        500_u32,
+        7_u64,
+        7_u64,
+        1_000_000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1000,
+    );
+
+    let operator = Address::generate(&env);
+    test_data.client.grant_operator(&operator);
+    test_data.client.grant_operator(&operator);
+}
+
+/// Granting `manager` to an address that already holds it must fail with
+/// `AddressAlreadyHoldsRole` (#16). `project_address` is granted the role
+/// during contract setup.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #16)")]
+fn test_grant_manager_already_holds_role() {
+    let env = Env::default();
+    let test_data = create_investment_contract(
+        &env,
+        500_u32,
+        7_u64,
+        7_u64,
+        1_000_000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1000,
+    );
+
+    test_data.client.grant_manager(&test_data.project_address);
+}
+
+/// `manager` is single-holder: granting it to another address while
+/// `project_address` holds it must fail with `AddressRoleAlreadyExists` (#17).
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #17)")]
+fn test_grant_manager_role_already_exists() {
+    let env = Env::default();
+    let test_data = create_investment_contract(
+        &env,
+        500_u32,
+        7_u64,
+        7_u64,
+        1_000_000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1000,
+    );
+
+    let manager_alt = Address::generate(&env);
+    test_data.client.grant_manager(&manager_alt);
+}
+
+/// Granting `company` to an address that already holds it must fail with
+/// `AddressAlreadyHoldsRole` (#16). `project_address` is granted the role
+/// during contract setup.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #16)")]
+fn test_grant_company_already_holds_role() {
+    let env = Env::default();
+    let test_data = create_investment_contract(
+        &env,
+        500_u32,
+        7_u64,
+        7_u64,
+        1_000_000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1000,
+    );
+
+    test_data.client.grant_company(&test_data.project_address);
+}
+
+/// `company` is single-holder: granting it to another address while
+/// `project_address` holds it must fail with `AddressRoleAlreadyExists` (#17).
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #17)")]
+fn test_grant_company_role_already_exists() {
+    let env = Env::default();
+    let test_data = create_investment_contract(
+        &env,
+        500_u32,
+        7_u64,
+        7_u64,
+        1_000_000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1000,
+    );
+
+    let company_alt = Address::generate(&env);
+    test_data.client.grant_company(&company_alt);
 }

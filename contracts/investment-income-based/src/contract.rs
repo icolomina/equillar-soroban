@@ -4,6 +4,9 @@ use stellar_contract_utils::pausable::{self as pausable, Pausable};
 use stellar_macros::{has_role, only_admin, only_role, when_not_paused, when_paused};
 
 use crate::collateral;
+use crate::constants::COMPANY_ROLE;
+use crate::constants::MANAGER_ROLE;
+use crate::constants::OPERATOR_ROLE;
 use crate::emergency;
 use crate::investment;
 use crate::payments;
@@ -84,6 +87,26 @@ fn validate_constructor_params(
         cmr_upper_divisor > cmr_lower_divisor,
         Error::CmrUpperDivisorMustBeGreaterTheCmrLowerDivisor
     );
+    Ok(())
+}
+
+fn validate_role(e: &Env, account: &Address, role: &Symbol) -> Result<(), Error> {
+    let mut already_has_role: bool = false;
+    let mut already_granted_role: bool = false;
+
+    if let Some(_hr) = access_control::has_role(e, account, role) {
+        already_has_role = true;
+    }
+
+    if role == &MANAGER_ROLE || role == &COMPANY_ROLE {
+        if access_control::get_role_member_count(e, role) > 0 {
+            already_granted_role = true
+        }
+    }
+
+    require!(!already_has_role, Error::AddressAlreadyHoldsRole);
+    require!(!already_granted_role, Error::AddressRoleAlreadyExists);
+
     Ok(())
 }
 
@@ -229,8 +252,8 @@ impl InvestmentContract {
     #[only_admin]
     #[when_not_paused]
     pub fn grant_operator(env: Env, operator: Address) -> Result<(), Error> {
-        let operator_role = Symbol::new(&env, "operator");
-        access_control::grant_role_no_auth(&env, &operator, &operator_role, &admin(&env));
+        validate_role(&env, &operator, &OPERATOR_ROLE)?;
+        access_control::grant_role_no_auth(&env, &operator, &OPERATOR_ROLE, &admin(&env));
         Ok(())
     }
 
@@ -243,8 +266,7 @@ impl InvestmentContract {
     #[when_not_paused]
     #[has_role(operator, "operator")]
     pub fn revoke_operator(env: Env, operator: Address) -> Result<(), Error> {
-        let operator_role = Symbol::new(&env, "operator");
-        access_control::revoke_role_no_auth(&env, &operator, &operator_role, &admin(&env));
+        access_control::revoke_role_no_auth(&env, &operator, &OPERATOR_ROLE, &admin(&env));
         Ok(())
     }
 
@@ -257,8 +279,8 @@ impl InvestmentContract {
     #[only_admin]
     #[when_not_paused]
     pub fn grant_company(env: Env, company: Address) -> Result<(), Error> {
-        let company_role = Symbol::new(&env, "company");
-        access_control::grant_role_no_auth(&env, &company, &company_role, &admin(&env));
+        validate_role(&env, &company, &COMPANY_ROLE)?;
+        access_control::grant_role_no_auth(&env, &company, &COMPANY_ROLE, &admin(&env));
         Ok(())
     }
 
@@ -271,8 +293,7 @@ impl InvestmentContract {
     #[when_not_paused]
     #[has_role(company, "company")]
     pub fn revoke_company(env: Env, company: Address) -> Result<(), Error> {
-        let company_role = Symbol::new(&env, "company");
-        access_control::revoke_role_no_auth(&env, &company, &company_role, &admin(&env));
+        access_control::revoke_role_no_auth(&env, &company, &COMPANY_ROLE, &admin(&env));
         Ok(())
     }
 
@@ -285,8 +306,8 @@ impl InvestmentContract {
     #[only_admin]
     #[when_not_paused]
     pub fn grant_manager(env: Env, manager: Address) -> Result<(), Error> {
-        let manager_role = Symbol::new(&env, "manager");
-        access_control::grant_role_no_auth(&env, &manager, &manager_role, &admin(&env));
+        validate_role(&env, &manager, &MANAGER_ROLE)?;
+        access_control::grant_role_no_auth(&env, &manager, &MANAGER_ROLE, &admin(&env));
         Ok(())
     }
 
@@ -299,8 +320,7 @@ impl InvestmentContract {
     #[when_not_paused]
     #[has_role(manager, "manager")]
     pub fn revoke_manager(env: Env, manager: Address) -> Result<(), Error> {
-        let manager_role = Symbol::new(&env, "manager");
-        access_control::revoke_role_no_auth(&env, &manager, &manager_role, &admin(&env));
+        access_control::revoke_role_no_auth(&env, &manager, &MANAGER_ROLE, &admin(&env));
         Ok(())
     }
 
@@ -464,7 +484,7 @@ impl InvestmentContract {
     #[only_admin]
     #[when_paused]
     pub fn upgrade(env: &Env, new_wasm_hash: BytesN<32>) {
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        env.deployer().upload_contract_wasm(new_wasm_hash);
     }
 }
 
