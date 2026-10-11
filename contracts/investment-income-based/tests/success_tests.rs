@@ -2,7 +2,7 @@ mod common;
 
 use common::{
     assert_contract_balance, create_investment_contract, do_payment_round,
-    do_payment_round_without_company_transfer, invest_as_operator,
+    do_payment_round_without_company_transfer, grant_company_exclusive, invest_as_operator,
 };
 use investment_income_based::shared::types::LiquidateInvestmentsStatus;
 use soroban_sdk::{
@@ -298,7 +298,8 @@ fn test_revoke_operator_blocks_invest() {
 }
 
 /// Verifies that granting `company` enables receiving project withdrawals,
-/// and revoking it blocks `withdrawn` for that address.
+/// and revoking it blocks `withdrawn` for that address. Since `company` is
+/// single-holder, the initial holder (`project_address`) is rotated out first.
 #[test]
 fn test_grant_and_revoke_company_role() {
     let e = Env::default();
@@ -324,7 +325,7 @@ fn test_grant_and_revoke_company_role() {
 
     e.ledger().set_timestamp(8 * 86_400);
 
-    test_data.client.grant_company(&company_alt);
+    grant_company_exclusive(&test_data, &company_alt);
     let before = test_data.token.balance(&company_alt);
     test_data.client.withdrawn(&100_i128, &company_alt);
     let after = test_data.token.balance(&company_alt);
@@ -336,6 +337,8 @@ fn test_grant_and_revoke_company_role() {
 }
 
 /// Verifies that revoking `manager` blocks commission withdrawals to that address.
+/// Since `manager` is single-holder, the initial holder (`project_address`) is
+/// revoked first to free the slot before granting the alternate address.
 #[test]
 fn test_revoke_manager_blocks_withdrawn_commissions() {
     let e = Env::default();
@@ -361,6 +364,7 @@ fn test_revoke_manager_blocks_withdrawn_commissions() {
 
     e.ledger().set_timestamp(8 * 86_400);
 
+    test_data.client.revoke_manager(&test_data.project_address);
     test_data.client.grant_manager(&manager_alt);
     test_data.client.revoke_manager(&manager_alt);
 
@@ -420,7 +424,7 @@ fn test_add_collateral() {
 
     let collateral_addr = Address::generate(&e);
     let (token_collateral, token_collateral_admin) = create_token_contract(&e, &test_data.admin);
-    test_data.client.grant_company(&collateral_addr);
+    grant_company_exclusive(&test_data, &collateral_addr);
     token_collateral_admin.mint(&collateral_addr, &200_i128);
     test_data.token_admin.mint(&test_data.user, &150_i128);
     invest_as_operator(&test_data, &test_data.user, &150_i128, &1234_u32);
@@ -467,7 +471,7 @@ fn test_pay_with_collateral() {
 
     let collateral_addr = Address::generate(&e);
     let (token_collateral, token_collateral_admin) = create_token_contract(&e, &test_data.admin);
-    test_data.client.grant_company(&collateral_addr);
+    grant_company_exclusive(&test_data, &collateral_addr);
     token_collateral_admin.mint(&collateral_addr, &1_i128);
 
     let user2 = Address::generate(&e);
@@ -520,7 +524,7 @@ fn test_return_collateral_to_company() {
 
     let collateral_addr = Address::generate(&e);
     let (token_collateral, token_collateral_admin) = create_token_contract(&e, &test_data.admin);
-    test_data.client.grant_company(&collateral_addr);
+    grant_company_exclusive(&test_data, &collateral_addr);
     token_collateral_admin.mint(&collateral_addr, &4000_i128);
 
     let user2 = soroban_sdk::Address::generate(&e);
