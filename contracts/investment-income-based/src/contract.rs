@@ -321,8 +321,7 @@ impl InvestmentContract {
     #[when_not_paused]
     #[has_role(manager, "manager")]
     pub fn revoke_manager(env: Env, manager: Address) -> Result<(), Error> {
-        let manager_role = Symbol::new(&env, "manager");
-        access_control::revoke_role_no_auth(&env, &manager, &manager_role, &admin(&env));
+        access_control::revoke_role_no_auth(&env, &manager, &MANAGER_ROLE, &admin(&env));
         Ok(())
     }
 
@@ -486,7 +485,7 @@ impl InvestmentContract {
     #[only_admin]
     #[when_paused]
     pub fn upgrade(env: &Env, new_wasm_hash: BytesN<32>) {
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        env.deployer().upload_contract_wasm(new_wasm_hash);
     }
 }
 

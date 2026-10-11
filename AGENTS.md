@@ -33,19 +33,14 @@ stellar contract build
   contract's own `target/`** (`contracts/*` are workspace members). The final
   wasm is `target/wasm32v1-none/release/investment_income_based.wasm` from the
   repo root (`../../target/...` from the contract dir).
-- **`Cargo.lock` is gitignored** and the local one already contains the required
-  ed25519-dalek pin (2.2.0). If you ever regenerate the lockfile
-  (`cargo generate-lockfile`, or after dependency changes), tests will fail to
-  resolve until you re-apply the pin:
-  ```bash
-  cargo update -p ed25519-dalek@3.0.0 --precise 2.2.0
-  ```
-  CI (`.github/workflows/rust.yml`) does exactly this on every run, in order:
-  fmt check → clippy → build → test.
-  This conflict is expected to disappear once the contract moves to
-  soroban-sdk 27 — which is blocked on OpenZeppelin's `stellar-*` crates
-  (pinned `=0.7.2` in the workspace) releasing a compatible version. When
-  upgrading, check whether the pin can be dropped instead of re-applying it.
+- **`stellar-contract-utils`, `stellar-access`, `stellar-macros` are git
+  dependencies** pinned to a commit of `OpenZeppelin/stellar-contracts` (not
+  crates.io), because the crates.io releases don't support soroban-sdk 28 yet.
+  The workspace `soroban-sdk` must match the version those crates use (28.x).
+  When OpenZeppelin publishes a release for soroban-sdk 28+, switch back to
+  crates.io versions and bump the `rev` only deliberately.
+- **`Cargo.lock` is gitignored** and resolved fresh in CI. The former
+  `ed25519-dalek` pin workaround is no longer needed.
 - **`test_snapshots/*.json` are auto-generated** by every `cargo test` run
   (deterministic, gitignored). Never hand-edit them; diffs there are noise.
 
