@@ -91,7 +91,6 @@ fn validate_constructor_params(
 }
 
 fn validate_role(e: &Env, account: &Address, role: &Symbol) -> Result<(), Error> {
-    
     let mut already_has_role: bool = false;
     let mut already_granted_role: bool = false;
 
@@ -104,11 +103,11 @@ fn validate_role(e: &Env, account: &Address, role: &Symbol) -> Result<(), Error>
             already_granted_role = true
         }
     }
-        
+
     require!(!already_has_role, Error::AddressAlreadyHoldsRole);
     require!(!already_granted_role, Error::AddressRoleAlreadyExists);
 
-    Ok(())   
+    Ok(())
 }
 
 // Public Soroban entrypoints exported by the contract.
