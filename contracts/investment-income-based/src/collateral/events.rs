@@ -29,6 +29,15 @@ pub(super) struct CollateralReturned {
     pub total_returned: i128,
 }
 
+/// Emitted when remaining collateral is returned to the provider.
+#[contractevent]
+pub(super) struct AllCollateralWithdrawn {
+    #[topic]
+    pub addr: Address,
+    pub to: Address,
+    pub total_returned: i128,
+}
+
 /// Publishes collateral deposit event.
 pub(super) fn emit_collateral_deposited(
     env: &Env,
@@ -60,6 +69,16 @@ pub(super) fn emit_collateral_sent(env: &Env, to: Address, total_sent: i128) {
 /// Publishes collateral return event.
 pub(super) fn emit_collateral_returned(env: &Env, to: Address, total_returned: i128) {
     CollateralReturned {
+        addr: env.current_contract_address(),
+        to,
+        total_returned,
+    }
+    .publish(env);
+}
+
+/// Publishes collateral return event.
+pub(super) fn emit_all_collateral_withdrawn(env: &Env, to: Address, total_returned: i128) {
+    AllCollateralWithdrawn {
         addr: env.current_contract_address(),
         to,
         total_returned,

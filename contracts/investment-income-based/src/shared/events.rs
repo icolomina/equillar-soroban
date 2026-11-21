@@ -1,6 +1,6 @@
 use soroban_sdk::{contractevent, Address, Env};
 
-use crate::shared::types::ContractBalance;
+use crate::shared::types::{Balance, BalanceAsset, BalanceEquity, BalanceLiabilities};
 
 /// Emitted once on successful contract deployment/configuration.
 #[contractevent]
@@ -10,20 +10,11 @@ pub struct ContractDeployed {
     ts_payments_start: u64,
 }
 
-/// Emitted whenever aggregated contract balance snapshot is updated.
 #[contractevent]
-pub struct ContractBalanceUpdated {
-    pub reserve: i128,
-    pub project: i128,
-    pub comission: i128,
-    pub comission_withdrawal: i128,
-    pub payments: i128,
-    pub project_withdrawals: i128,
-    pub payment_obligations: i128,
-    pub collateral_received: i128,
-    pub collateral_liquidated: i128,
-    pub collateral_returned: i128,
-    pub refunded_to_investor: i128,
+pub struct BalanceUpdated {
+    pub assets: BalanceAsset,
+    pub liabilities: BalanceLiabilities,
+    pub equity: BalanceEquity,
 }
 
 /// Publishes contract deployment event.
@@ -41,20 +32,21 @@ pub fn emit_contract_deployed_event(
     .publish(env);
 }
 
-/// Publishes balance snapshot update event.
-pub fn emit_balance_updated_event(env: &Env, contract_balance: &ContractBalance) {
-    ContractBalanceUpdated {
-        reserve: contract_balance.reserve,
-        project: contract_balance.project,
-        comission: contract_balance.comission,
-        comission_withdrawal: contract_balance.comission_withdrawal,
-        payments: contract_balance.payments,
-        project_withdrawals: contract_balance.project_withdrawals,
-        payment_obligations: contract_balance.payment_obligations,
-        collateral_received: contract_balance.collateral_received,
-        collateral_liquidated: contract_balance.collateral_liquidated,
-        collateral_returned: contract_balance.collateral_returned,
-        refunded_to_investor: contract_balance.refunded_to_investor,
+pub fn emit_balance_updated_event(env: &Env, balance: &Balance) {
+    BalanceUpdated {
+        assets: BalanceAsset {
+            payment_rigths: balance.assets.payment_rigths,
+            contract_earnings: balance.assets.contract_earnings,
+            managed_volume: balance.assets.managed_volume,
+            managed_collateral: balance.assets.managed_collateral,
+        },
+        liabilities: BalanceLiabilities {
+            payment_obligations: balance.liabilities.payment_obligations,
+            return_collateral_obligations: balance.liabilities.return_collateral_obligations,
+        },
+        equity: BalanceEquity {
+            contract_commissions: balance.equity.contract_commissions,
+        },
     }
     .publish(env);
 }

@@ -4,6 +4,7 @@ use crate::shared::types::{ContractData, Error};
 pub fn validate_withdrawal(
     amount: i128,
     project_balance: i128,
+    contract_liquidity: i128,
     current_ts: u64,
     contract_data: &ContractData,
 ) -> Result<(), Error> {
@@ -11,6 +12,8 @@ pub fn validate_withdrawal(
         current_ts > contract_data.ts_fundraising_ends,
         Error::FundrasingTimeOngoingYet,
         project_balance >= amount,
+        Error::ContractInsufficientBalance,
+        amount <= contract_liquidity,
         Error::ContractInsufficientBalance
     );
     Ok(())
@@ -18,6 +21,7 @@ pub fn validate_withdrawal(
 
 pub fn validate_withdrawal_commission(
     amount: i128,
+    contract_liquidity: i128,
     current_ts: u64,
     contract_data: &ContractData,
 ) -> Result<(), Error> {
@@ -25,6 +29,8 @@ pub fn validate_withdrawal_commission(
         current_ts > contract_data.ts_fundraising_ends,
         Error::FundrasingTimeOngoingYet,
         amount > 0,
+        Error::EmptyCommissionBalance,
+        amount <= contract_liquidity,
         Error::ContractInsufficientBalance
     );
     Ok(())

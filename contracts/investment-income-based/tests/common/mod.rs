@@ -1,3 +1,5 @@
+// Each test binary compiles this module; helpers used by only one of them
+// would otherwise trigger dead-code warnings in the others.
 #![allow(dead_code)]
 
 use investment_income_based::contract::InvestmentContractClient;
@@ -25,6 +27,9 @@ pub mod reflector {
     #[contracttype]
     enum DataKey {
         ContractToken,
+        /// Per-asset price overrides (kept for future price-manipulation
+        /// suites); absent keys fall back to the hardcoded defaults below.
+        Price(Asset),
     }
 
     #[contractimpl]
@@ -39,6 +44,11 @@ pub mod reflector {
     #[contractimpl]
     impl ReflectorOracle for ReflectorMock {
         fn lastprice(env: &Env, asset: Asset) -> Option<PriceData> {
+            // Overrides take precedence over the hardcoded defaults.
+            if let Some(price_data) = env.storage().instance().get(&DataKey::Price(asset.clone())) {
+                return Some(price_data);
+            }
+
             let contract_token: Option<Address> =
                 env.storage().instance().get(&DataKey::ContractToken);
 
@@ -92,6 +102,9 @@ pub struct TestData<'a> {
     pub token_admin: TokenAdminClient<'a>,
 }
 
+/// Test constructor mirroring `InvestmentContractParams`; the argument list
+/// matches the deployment parameters one by one on purpose.
+#[allow(clippy::too_many_arguments)]
 pub fn create_investment_contract(
     env: &Env,
     i_rate: u32,
@@ -135,7 +148,7 @@ pub fn create_investment_contract(
             (
                 admin.clone(),
                 token.address.clone(),
-                reflector_id,
+                reflector_id.clone(),
                 investment_params,
             ),
         ),
@@ -154,18 +167,72 @@ pub fn create_investment_contract(
     }
 }
 
-pub fn assert_contract_balance(
-    test_data: &TestData,
-    project: i128,
-    reserve: i128,
-    comission: i128,
-    payments: i128,
-) {
+/// Expected values for a `Balance` snapshot. Defaults to all zeros.
+#[derive(Default, Debug, PartialEq)]
+pub struct BalanceExpectation {
+    pub payment_rigths: i128,
+    pub contract_earnings: i128,
+    pub managed_volume: i128,
+    pub managed_collateral: i128,
+    pub payment_obligations: i128,
+    pub return_collateral_obligations: i128,
+    pub contract_commissions: i128,
+}
+
+/// Asserts the on-chain `Balance` snapshot field by field and verifies the
+/// accounting equation `assets == liabilities + equity` holds.
+pub fn assert_balance(test_data: &TestData, expected: BalanceExpectation) {
     let balance = test_data.client.get_contract_balance(&test_data.admin);
-    assert_eq!(balance.project, project);
-    assert_eq!(balance.reserve, reserve);
-    assert_eq!(balance.comission, comission);
-    assert_eq!(balance.payments, payments);
+
+    assert_eq!(
+        balance.assets.payment_rigths, expected.payment_rigths,
+        "assets.payment_rigths"
+    );
+    assert_eq!(
+        balance.assets.contract_earnings, expected.contract_earnings,
+        "assets.contract_earnings"
+    );
+    assert_eq!(
+        balance.assets.managed_volume, expected.managed_volume,
+        "assets.managed_volume"
+    );
+    assert_eq!(
+        balance.assets.managed_collateral, expected.managed_collateral,
+        "assets.managed_collateral"
+    );
+    assert_eq!(
+        balance.liabilities.payment_obligations, expected.payment_obligations,
+        "liabilities.payment_obligations"
+    );
+    assert_eq!(
+        balance.liabilities.return_collateral_obligations, expected.return_collateral_obligations,
+        "liabilities.return_collateral_obligations"
+    );
+    assert_eq!(
+        balance.equity.contract_commissions, expected.contract_commissions,
+        "equity.contract_commissions"
+    );
+
+    assert_balance_equation(test_data);
+}
+
+/// Asserts only that the accounting equation holds for the current state:
+/// `assets == liabilities + equity`.
+pub fn assert_balance_equation(test_data: &TestData) {
+    let balance = test_data.client.get_contract_balance(&test_data.admin);
+
+    let total_assets = balance.assets.contract_earnings
+        + balance.assets.managed_volume
+        + balance.assets.payment_rigths
+        + balance.assets.managed_collateral;
+    let total_liabilities =
+        balance.liabilities.payment_obligations + balance.liabilities.return_collateral_obligations;
+
+    assert_eq!(
+        total_assets,
+        total_liabilities + balance.equity.contract_commissions,
+        "accounting equation must hold: assets == liabilities + equity"
+    );
 }
 
 pub fn do_payment_round(
@@ -208,14 +275,9 @@ pub fn do_payment_round_without_company_transfer(
     position
 }
 
-/// Invests as `addr`, granting it the `operator` role first unless it already
-/// holds it (re-granting the same address fails with `AddressAlreadyHoldsRole`).
-pub fn invest_as_operator(
-    test_data: &TestData,
-    addr: &Address,
-    amount: &i128,
-    token_id: &u32,
-) -> Position {
+/// Grants the `operator` role to `addr` unless it already holds it
+/// (re-granting the same address fails with `AddressAlreadyHoldsRole`).
+pub fn ensure_operator(test_data: &TestData, addr: &Address) {
     let env = &test_data.client.env;
     let operator_role = symbol_short!("operator");
 
@@ -227,7 +289,17 @@ pub fn invest_as_operator(
     if !already_operator {
         test_data.client.grant_operator(addr);
     }
+}
 
+/// Invests as `addr`, granting it the `operator` role first unless it already
+/// holds it (re-granting the same address fails with `AddressAlreadyHoldsRole`).
+pub fn invest_as_operator(
+    test_data: &TestData,
+    addr: &Address,
+    amount: &i128,
+    token_id: &u32,
+) -> Position {
+    ensure_operator(test_data, addr);
     test_data.client.invest(addr, amount, token_id)
 }
 

@@ -31,40 +31,48 @@ pub fn invest(
 
     let mut contract_data = shared::storage::get_contract_data(env);
     let token = shared::token::get_token(env, &contract_data);
-    let mut contract_balance = shared::storage::get_balances_or_new(env);
+    let mut balance = shared::storage::get_balance_or_new(env);
 
     validation::validate_investment(
         amount,
         &contract_data,
         token.balance(investor),
+        token.balance(&env.current_contract_address()),
         env.ledger().timestamp(),
-        &contract_balance,
     )?;
 
-    token
-        .try_transfer(investor, env.current_contract_address(), &amount)
-        .map_err(|_| Error::RecipientCannotReceivePayment)?
-        .map_err(|_| Error::InvalidPaymentData)?;
+    if let Some(position) =
+        allocation::create_position(env, &contract_data, &amount, token.decimals(), position_id)
+    {
+        token
+            .try_transfer(investor, env.current_contract_address(), &amount)
+            .map_err(|_| Error::RecipientCannotReceivePayment)?
+            .map_err(|_| Error::InvalidPaymentData)?;
 
-    let position =
-        allocation::create_position(env, &contract_data, &amount, token.decimals(), position_id);
+        shared::storage::set_position(env, position_id, &position);
+        shared::storage::set_addr_position_id(env, position_id, investor.clone());
+        balance.recalculate_from_position(&position)?;
+        contract_data.amount_to_pay_per_month += position.regular_payment;
 
-    shared::storage::set_position(env, position_id, &position);
-    shared::storage::set_addr_position_id(env, position_id, investor.clone());
-    contract_balance.recalculate_from_position(&position)?;
-    contract_data.amount_to_pay_per_month += position.regular_payment;
+        shared::storage::update_contract_data(env, &contract_data);
+        shared::storage::update_balance(env, &balance);
 
-    shared::storage::update_contract_data(env, &contract_data);
-    shared::storage::update_contract_balances(env, &contract_balance);
+        shared::events::emit_balance_updated_event(env, &balance);
+        events::emit_investment_received_event(env, position.deposited, position.returns);
 
-    shared::events::emit_balance_updated_event(env, &contract_balance);
-    events::emit_investment_received_event(env, position.deposited, position.returns);
+        let liquidity_after_transfer_position = token.balance(&env.current_contract_address());
+        if liquidity_after_transfer_position >= contract_data.goal {
+            events::emit_goal_reached_event(
+                env,
+                liquidity_after_transfer_position,
+                contract_data.goal,
+            );
+        }
 
-    if contract_balance.project >= contract_data.goal {
-        events::emit_goal_reached_event(env, contract_balance.project, contract_data.goal);
+        return Ok(position);
     }
 
-    Ok(position)
+    Err(Error::TooLargeInvestment)
 }
 
 /// Refunds an existing investment during the allowed refund phase.
@@ -79,7 +87,7 @@ pub fn refund_investor(env: &Env, position_id: u32) -> Result<i128, Error> {
         shared::storage::get_position(env, position_id).ok_or(Error::AddressHasNotInvested)?;
     let contract_data = shared::storage::get_contract_data(env);
     let token = shared::token::get_token(env, &contract_data);
-    let mut contract_balance = shared::storage::get_balances_or_new(env);
+    let mut balance = shared::storage::get_balance_or_new(env);
 
     let amount_to_refund = position.deposited + position.commission;
     let investment_owner = shared::storage::get_addr_position_id(env, position_id)
@@ -89,6 +97,7 @@ pub fn refund_investor(env: &Env, position_id: u32) -> Result<i128, Error> {
         &position,
         &contract_data,
         amount_to_refund,
+        token.balance(&env.current_contract_address()),
         env.ledger().timestamp(),
     )?;
 
@@ -102,10 +111,11 @@ pub fn refund_investor(env: &Env, position_id: u32) -> Result<i128, Error> {
         .map_err(|_| Error::InvalidPaymentData)?;
 
     position.completed = true;
-    contract_balance.recalculate_from_refunded_to_investor(&position)?;
+    balance.recalculate_from_refunded_to_investor(&position)?;
     shared::storage::set_position(env, position_id, &position);
-    shared::storage::update_contract_balances(env, &contract_balance);
+    shared::storage::update_balance(env, &balance);
     events::emit_investment_deposit_refunded(env, investment_owner, amount_to_refund);
+    shared::events::emit_balance_updated_event(env, &balance);
 
     Ok(amount_to_refund)
 }

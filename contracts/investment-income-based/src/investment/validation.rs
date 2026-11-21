@@ -1,6 +1,6 @@
 use crate::require;
 use crate::shared::types::Position;
-use crate::shared::types::{ContractBalance, ContractData, Error};
+use crate::shared::types::{ContractData, Error};
 
 /// Validates whether a new investment can be accepted at current state.
 ///
@@ -9,11 +9,11 @@ pub fn validate_investment(
     amount: i128,
     contract_data: &ContractData,
     investor_balance: i128,
+    contract_liquidity: i128,
     current_ts: u64,
-    contract_balance: &ContractBalance,
 ) -> Result<(), Error> {
     require!(
-        contract_balance.project < contract_data.goal,
+        contract_liquidity < contract_data.goal,
         Error::GoalReached,
         amount >= contract_data.min_per_investment,
         Error::AmountLessThanMinimum,
@@ -33,6 +33,7 @@ pub fn validate_refund_investor(
     position: &Position,
     contract_data: &ContractData,
     amount_to_refund: i128,
+    contract_liquidity: i128,
     current_ts: u64,
 ) -> Result<(), Error> {
     require!(
@@ -41,7 +42,9 @@ pub fn validate_refund_investor(
         !position.completed,
         Error::PositionCompleted,
         amount_to_refund > 0,
-        Error::EmptyRefundAmount
+        Error::EmptyRefundAmount,
+        amount_to_refund <= contract_liquidity,
+        Error::ContractInsufficientBalance
     );
     Ok(())
 }
