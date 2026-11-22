@@ -39,14 +39,6 @@ stellar contract build
   contract's own `target/`** (`contracts/*` are workspace members). The final
   wasm is `target/wasm32v1-none/release/investment_income_based.wasm` from the
   repo root (`../../target/...` from the contract dir).
-- **`stellar-contract-utils`, `stellar-access`, `stellar-macros` are git
-  dependencies** pinned to a commit of `OpenZeppelin/stellar-contracts` (not
-  crates.io), because the crates.io releases don't support soroban-sdk 28 yet.
-  The workspace `soroban-sdk` must match the version those crates use (28.x).
-  When OpenZeppelin publishes a release for soroban-sdk 28+, switch back to
-  crates.io versions and bump the `rev` only deliberately.
-- **`Cargo.lock` is gitignored** and resolved fresh in CI. The former
-  `ed25519-dalek` pin workaround is no longer needed.
 - **`test_snapshots/*.json` are auto-generated** by every `cargo test` run
   (deterministic, gitignored). Never hand-edit them; diffs there are noise.
 - **`tests/*.proptest-regressions` are auto-regenerated** by proptest whenever

@@ -14,11 +14,20 @@ Full documentation lives in this repository, available in two languages. Each in
 | | Index |
 |---|---|
 | 🇬🇧 **English** | [`docs/en/index.md`](docs/en/index.md) |
-| 🇪🇸 **Español** | [`docs/es/index.md`](docs/es/index.md) |
+| 🇪🇸 **Spanish** | [`docs/es/index.md`](docs/es/index.md) |
 
 Start with **Current status** and **The Balance model** — the double-entry accounting every other section builds on.
 
-## Repository
+**About the docs:** These docs were drafted with the assistance of AI models and verified line-by-line against the contract code; every numeric example is executable truth backed by the test suite. They may still contain errors, and both the docs and the code are under continuous improvement — issues and corrections are welcome.
 
-- Repository: <https://github.com/icolomina/equillar-soroban>
-- Main website: <https://equillar.com>
+## Contributing
+
+Contributions are welcome. You can help in many ways beyond writing code:
+
+- **Docs**: fix typos or errors, clarify explanations, or translate missing sections (English and Spanish).
+- **Testing**: extend the directed or fuzz test suites, or report behavior that looks wrong.
+- **Code**: bug fixes, hardening, and new features — open an issue first so we can discuss the approach.
+
+Open an issue describing your idea, or fork and open a pull request. For anything touching payment, refund, or collateral math, explain your reasoning in the PR description.
+
+Before running or testing the project locally, see the [docs](#documentation): the repo conventions (commands, test layout, gotchas) are described in [`AGENTS.md`](AGENTS.md).
