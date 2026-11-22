@@ -5,7 +5,7 @@ title: Apéndice de códigos de error
 
 # Apéndice: códigos de error de negocio
 
-Todos los errores de negocio se declaran en `src/shared/types.rs` como el enum canónico `Error`. Los valores son discriminantes numéricos estables — los integradores pueden apoyarse en ellos para su propio mapeo de errores. El enum no contiene códigos huérfanos: toda variante declarada se devuelve en algún path del contrato. Los códigos 52 (`EmptyEmergencyPool`), 55 (`PaymentsObligationsRemaining`) y 60 (`RetuenCollateralObligationsRemaining`) fueron eliminados del enum al quedar sin uso tras la nueva semántica de `withdrawn_all`.
+Todos los errores de negocio se declaran en `src/shared/types.rs` como el enum canónico `Error`. Los valores son discriminantes numéricos estables — los integradores pueden apoyarse en ellos para su propio mapeo de errores. El enum no contiene códigos huérfanos: toda variante declarada se devuelve en algún path del contrato. Los códigos 52 (`EmptyEmergencyPool`) y 55 (`PaymentsObligationsRemaining`) fueron eliminados del enum al quedar sin uso tras la nueva semántica de `withdrawn_all`.
 
 | Código | Nombre | Cuándo se dispara |
 |---:|---|---|
@@ -50,6 +50,7 @@ Todos los errores de negocio se declaran en `src/shared/types.rs` como el enum c
 | 57 | `BalanceUpdateUnderflow` | Subdesbordamiento de resta checked durante un recálculo del `Balance`. |
 | 58 | `CollateralAmountOverflow` | El colateral total desbordaría `i128`. |
 | 59 | `CollateralPriceOracleError` | El cross price no pudo computarse durante la liquidación (sin precio de oráculo o precio cero del token del contrato). |
+| 60 | `CollateralStillRemainingOnContract` | `withdrawn_all` con colateral aún en poder del contrato — hay que barrerlo antes con `withdrawn_all_collateral`. |
 | 61 | `TooLargeInvestment` | Depósito demasiado grande para la aritmética WAD — rechazo limpio no-op: nada se transfiere ni almacena. |
 | 62 | `BalanceEquationViolation` | La verificación de la ecuación contable falló durante un recálculo del `Balance` — solo alcanzable mediante un bug contable interno. |
 | 63 | `EmptyCommissionBalance` | Retirada de comisiones sin comisión pendiente. |

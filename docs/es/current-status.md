@@ -32,7 +32,7 @@ El protocolo actual ya incluye:
 ## Cómo se testea
 
 - `success_tests.rs` — 21 tests dirigidos de flujo extremo a extremo con aserciones exactas campo a campo de la contabilidad
-- `error_tests.rs` — 44 tests, uno por guard de error de negocio
+- `error_tests.rs` — 45 tests, uno por guard de error de negocio
 - `fuzz_properties.rs` — fuzzing basado en propiedades (proptest) de la matemática de asignación a través del entrypoint público `invest`, testeando invariantes de asignación y la ecuación contable sobre miles de casos aleatorios
 
 Ver [Tests y cobertura](./tests.md) para los detalles.

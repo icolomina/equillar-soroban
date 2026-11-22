@@ -1352,18 +1352,19 @@ fn test_emergency_close_and_withdrawn_all() {
     assert_balance(&test_data, BalanceExpectation::default());
 }
 
-/// Verifies the emergency sweep with **pending payment obligations** (the
-/// withdrawn_all gates no longer require zero liabilities):
+/// Verifies the emergency sweep order with **pending payment obligations**:
 ///
 /// 1. An investment is created and collateral is deposited while obligations
 ///    are still outstanding.
 /// 2. Commissions are withdrawn and emergency close is activated with the
 ///    position still unpaid (`payment_obligations = 1044`).
-/// 3. `withdrawn_all` sweeps the whole contract token balance (investor
+/// 3. `withdrawn_all_collateral` runs **first**: it sweeps the remaining
+///    collateral to the manager address and lowers `managed_collateral` /
+///    `return_collateral_obligations` symmetrically (no full reset —
+///    payment obligations stay on the books).
+/// 4. `withdrawn_all` then sweeps the whole contract token balance (investor
 ///    principal included) to the manager address — the integrator decides
-///    what to do with those funds off-chain.
-/// 4. `withdrawn_all_collateral` sweeps the remaining collateral to the
-///    manager address as well and fully resets the balance.
+///    what to do with those funds off-chain — and fully resets the balance.
 ///
 /// Token trace: investor deposits 1000, commissions out 5 => `withdrawn_all`
 /// sweeps 995; collateral held 100 => `withdrawn_all_collateral` sweeps 100.
@@ -1434,18 +1435,11 @@ fn test_withdrawn_all_and_withdrawn_all_collateral_in_emergency_with_pending_obl
     assert_eq!(withdrawn_commission, inv.commission);
     assert!(test_data.client.activate_emergency_close());
 
-    // Sweep the contract token balance to the manager even though
-    // payment_obligations is still 1044.
-    let manager_balance_before = test_data.token.balance(&test_data.project_address);
-    let swept = test_data.client.withdrawn_all(&test_data.project_address);
-    let manager_balance_after = test_data.token.balance(&test_data.project_address);
-
-    assert_eq!(swept, 995_i128);
-    assert_eq!(manager_balance_after - manager_balance_before, 995_i128);
-    assert_balance(&test_data, BalanceExpectation::default());
-
-    // Sweep the remaining collateral to the manager as well; the balance
-    // stays fully reset afterwards.
+    // Sweep the remaining collateral first: withdrawn_all requires the
+    // contract to hold no collateral at sweep time (CollateralStillRemaining-
+    // OnContract, #60). The collateral sweep lowers managed_collateral and
+    // return_collateral_obligations symmetrically; payment obligations stay
+    // on the books (1044).
     let manager_collateral_before = token_collateral.balance(&test_data.project_address);
     let swept_collateral = test_data
         .client
@@ -1457,5 +1451,22 @@ fn test_withdrawn_all_and_withdrawn_all_collateral_in_emergency_with_pending_obl
         manager_collateral_after - manager_collateral_before,
         100_i128
     );
+    assert_balance(
+        &test_data,
+        BalanceExpectation {
+            managed_volume: inv.total,
+            payment_obligations: inv.total,
+            ..Default::default()
+        },
+    );
+
+    // Now sweep the contract token balance to the manager even though
+    // payment_obligations is still 1044; the balance ends fully reset.
+    let manager_balance_before = test_data.token.balance(&test_data.project_address);
+    let swept = test_data.client.withdrawn_all(&test_data.project_address);
+    let manager_balance_after = test_data.token.balance(&test_data.project_address);
+
+    assert_eq!(swept, 995_i128);
+    assert_eq!(manager_balance_after - manager_balance_before, 995_i128);
     assert_balance(&test_data, BalanceExpectation::default());
 }

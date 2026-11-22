@@ -80,7 +80,8 @@ pub fn withdrawn_commissions(env: &Env, to: &Address) -> Result<i128, Error> {
 /// Resets the balance
 ///
 /// # Errors
-/// Fails if there are payment obligations yet
+/// Fails if collateral is still held on the contract (`CollateralStillRemainingOnContract`)
+/// or if the emergency-close state is not active (`EmergencyNotActive`).
 pub fn withdrawn_all(env: &Env, to: &Address) -> Result<i128, Error> {
     let contract_data = shared::storage::get_contract_data(env);
     let token = shared::token::get_token(env, &contract_data);
@@ -88,7 +89,7 @@ pub fn withdrawn_all(env: &Env, to: &Address) -> Result<i128, Error> {
     let mut balance = shared::storage::get_balance_or_new(env);
 
     require!(
-        balance.assets.managed_collateral == 0, 
+        balance.assets.managed_collateral == 0,
         Error::CollateralStillRemainingOnContract,
         shared::storage::get_emergency_close_state(env).is_some(),
         Error::EmergencyNotActive

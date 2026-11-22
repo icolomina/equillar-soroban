@@ -5,7 +5,7 @@ title: Error codes appendix
 
 # Appendix: business error codes
 
-All business errors are declared in `src/shared/types.rs` as the canonical `Error` enum. Values are stable numeric discriminants — integrators can rely on them for their own error mapping. The enum contains no orphan codes: every declared variant is returned by some contract path. Codes 52 (`EmptyEmergencyPool`), 55 (`PaymentsObligationsRemaining`), and 60 (`RetuenCollateralObligationsRemaining`) were removed from the enum after becoming unused under the new `withdrawn_all` semantics.
+All business errors are declared in `src/shared/types.rs` as the canonical `Error` enum. Values are stable numeric discriminants — integrators can rely on them for their own error mapping. The enum contains no orphan codes: every declared variant is returned by some contract path. Codes 52 (`EmptyEmergencyPool`) and 55 (`PaymentsObligationsRemaining`) were removed from the enum after becoming unused under the new `withdrawn_all` semantics.
 
 | Code | Name | When it fires |
 |---:|---|---|
@@ -50,6 +50,7 @@ All business errors are declared in `src/shared/types.rs` as the canonical `Erro
 | 57 | `BalanceUpdateUnderflow` | Checked subtraction underflow during a `Balance` recalculation. |
 | 58 | `CollateralAmountOverflow` | Total collateral would overflow `i128`. |
 | 59 | `CollateralPriceOracleError` | Cross price could not be computed during liquidation (no oracle price or zero contract-token price). |
+| 60 | `CollateralStillRemainingOnContract` | `withdrawn_all` with collateral still held by the contract — sweep it first with `withdrawn_all_collateral`. |
 | 61 | `TooLargeInvestment` | Deposit too large for the WAD arithmetic — clean no-op rejection: nothing is transferred or stored. |
 | 62 | `BalanceEquationViolation` | The accounting-equation check failed during a `Balance` recalculation — only reachable through an internal accounting bug. |
 | 63 | `EmptyCommissionBalance` | Commission withdrawal with no pending commission. |

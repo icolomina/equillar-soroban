@@ -32,7 +32,7 @@ The current protocol already includes:
 ## How it is tested
 
 - `success_tests.rs` — 21 directed end-to-end lifecycle tests with exact per-field accounting assertions
-- `error_tests.rs` — 44 tests, one per business-error guard
+- `error_tests.rs` — 45 tests, one per business-error guard
 - `fuzz_properties.rs` — property-based fuzzing (proptest) of the allocation math through the public `invest` entrypoint, testing allocation invariants and the accounting equation over thousands of randomized cases
 
 See [Testing and test coverage](./tests.md) for details.

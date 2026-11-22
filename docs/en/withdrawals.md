@@ -79,13 +79,14 @@ stellar contract invoke \
   --to "G....."
 ```
 
-This is the closing operation of an instance's lifecycle. Its only precondition is the emergency state:
+This is the closing operation of an instance's lifecycle. Its preconditions, checked in this order:
 
 | Check | Error if not satisfied |
 |---|---|
+| The contract holds no collateral pending withdrawal | `CollateralStillRemainingOnContract` (60) |
 | Emergency close is **active** | `EmergencyNotActive` (49) |
 
-If the contract still holds tokens, the full token balance is transferred to `to`, and the `Balance` is **reset** (all fields to zero). Unlike the previous design, `withdrawn_all` does **not** require payment or collateral obligations to be zero: it can be executed with pending obligations and the integrator decides off-chain what to do with the received funds (for example, paying investors outside the contract).
+If the contract still holds tokens, the full token balance is transferred to `to`, and the `Balance` is **reset** (all fields to zero). Payment obligations do **not** need to be zero — the integrator decides off-chain what to do with the received funds — but the **collateral must have been withdrawn beforehand** via [`withdrawn_all_collateral`](./collateral.md#collateral-final-sweep--withdrawn_all_collateral): with collateral still held, `withdrawn_all` is rejected with `CollateralStillRemainingOnContract` (60).
 
 > **Note the deliberate composition:** `withdrawn_all` requires the emergency gate to be active. See [Emergency close](./emergency-close.md) for how activation and the final sweep compose into the closing sequence of an instance. For the remaining collateral there is the equivalent operation [`withdrawn_all_collateral`](./collateral.md#collateral-final-sweep--withdrawn_all_collateral), which also sends the funds to a `manager` address instead of returning them to the provider.
 

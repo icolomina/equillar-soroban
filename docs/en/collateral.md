@@ -298,7 +298,7 @@ Conditions:
 | `to` holds the `manager` role | access error |
 | Emergency close is **active** | `EmergencyNotActive` (49) |
 
-If the contract still holds collateral tokens, the full balance is transferred to `to` and the `Balance` is **fully reset** (all fields to zero). Unlike `return_collateral_to_company`, no distinction is made between "needed" and "excess" collateral: with the emergency active, all collateral leaves towards the manager.
+If the contract still holds collateral tokens, the full balance is transferred to `to` and the accounting lowers the transferred collateral amount from both the matching asset and liability (the same way it does when the collateral is returned to the company). Unlike `return_collateral_to_company`, no distinction is made between "needed" and "excess" collateral: with the emergency active, all collateral leaves towards the manager.
 
 ## Events
 
@@ -372,7 +372,7 @@ stellar events \
 
 ### After the collateral final sweep
 
-- The `Balance` is fully reset via `balance.reset()` and the standard `BalanceUpdated` event is emitted.
+- The balance is updated via `recalculate_from_collateral_returned` (the matching asset and liability decrease symmetrically) and published through the standard `BalanceUpdated` event.
 - The dedicated event records the sweep:
 
 ```rust
@@ -382,6 +382,8 @@ AllCollateralWithdrawn {
     total_returned,   // the total amount of collateral withdrawn
 }
 ```
+
+> **Important note**: events are only emitted and the balance updated if there are tokens left to transfer.
 
 ```bash
 stellar events \

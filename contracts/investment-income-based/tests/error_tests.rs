@@ -903,6 +903,55 @@ fn test_withdrawn_all_without_emergency() {
     test_data.client.withdrawn_all(&test_data.project_address);
 }
 
+/// `withdrawn_all` requires the contract to hold no collateral when the token
+/// sweep runs. With collateral still deposited (and emergency already active),
+/// it must fail with `CollateralStillRemainingOnContract` (#60) — this check
+/// runs before the emergency gate. The collateral must be swept first via
+/// `withdrawn_all_collateral`.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #60)")]
+fn test_withdrawn_all_with_collateral_remaining() {
+    let env = Env::default();
+    let test_data = create_investment_contract(
+        &env,
+        500_u32,
+        7_u64,
+        7_u64,
+        1_000_000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1200,
+    );
+
+    let user = Address::generate(&env);
+    test_data.token_admin.mint(&user, &1000);
+    invest_as_operator(&test_data, &user, &1000, &1234_u32);
+
+    let collateral_addr = Address::generate(&env);
+    let (token_collateral, token_collateral_admin) = create_token_contract(&env, &test_data.admin);
+    grant_company_exclusive(&test_data, &collateral_addr);
+    token_collateral_admin.mint(&collateral_addr, &200_i128);
+
+    test_data.client.add_collateral(
+        &token_collateral.address,
+        &100_i128,
+        &String::from_str(&env, "TEST"),
+        &collateral_addr,
+    );
+
+    env.ledger().set_timestamp(8 * 86_400);
+    test_data
+        .client
+        .withdrawn_commissions(&test_data.project_address);
+    test_data.client.activate_emergency_close();
+
+    test_data.client.withdrawn_all(&test_data.project_address);
+}
+
 /// `withdrawn_all_collateral` requires collateral to be configured. Calling it
 /// on an instance without any collateral deposit must fail with
 /// `CollateralNotConfigured` (#36) — this check runs before the emergency gate.

@@ -11,7 +11,7 @@ The test suite lives in `contracts/investment-income-based/tests/` and is split 
 tests/
 ├── common/mod.rs        # shared setup (contract deployment, mock oracle, token, helpers)
 ├── success_tests.rs     # 21 directed end-to-end flow tests
-├── error_tests.rs       # 44 directed guard tests
+├── error_tests.rs       # 45 directed guard tests
 └── fuzz_properties.rs   # 2 property-based fuzz tests (proptest)
 ```
 
@@ -29,7 +29,7 @@ Full end-to-end flows with **exact, field-level assertions** of both the returne
 
 The worked examples in this documentation ([Fundraising](./fundraising-and-positions.md#token-scale-example)) reproduce these exact values, so every figure you read here is executable truth.
 
-## 2. `error_tests.rs` — every guard, one test per `callsite` (44 tests)
+## 2. `error_tests.rs` — every guard, one test per `callsite` (45 tests)
 
 One test per business-error guard × entrypoint, asserting both the clean business error (no trap) and the expected panic code. Coverage:
 
@@ -39,7 +39,7 @@ One test per business-error guard × entrypoint, asserting both the clean busine
 - Refund guards (already refunded, fundraising ended, never invested)
 - Withdrawal guards (no available commission, already withdrawn, ongoing fundraising)
 - Collateral guards (not configured, empty, only one token)
-- Emergency guards (already active, pending commission, blocked operations during emergency)
+- Emergency guards (already active, pending commission, collateral remaining at sweep, blocked operations during emergency)
 - Role guards (already holds role, role already exists, company/manager single-holder rule)
 
 ## 3. `fuzz_properties.rs` — property-based fuzzing of allocations (2 properties)

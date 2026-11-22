@@ -83,7 +83,7 @@ Every `recalculate_from_*` function applies two-to-four field movements and then
 | `add_collateral` | `assets.managed_collateral += amount` · `liabilities.return_collateral_obligations += amount` |
 | `pay_with_collateral` | `assets.managed_collateral -= collateral` · `assets.managed_volume -= remaining` · `liabilities.return_collateral_obligations -= collateral` · `liabilities.payment_obligations -= remaining` |
 | `return_collateral_to_company` | `assets.managed_collateral -= amount` · `liabilities.return_collateral_obligations -= amount` |
-| `withdrawn_all_collateral` | all fields reset to zero (remaining collateral is sent to a `manager` address) |
+| `withdrawn_all_collateral` | `assets.managed_collateral -= amount` · `liabilities.return_collateral_obligations -= amount` (remaining collateral is sent to a `manager` address) |
 | `refund_investor` | `assets.managed_volume -= total` · `assets.contract_earnings -= commission` · `liabilities.payment_obligations -= total` · `equity.contract_commissions -= commission` |
 | `withdrawn_all` | all fields reset to zero |
 

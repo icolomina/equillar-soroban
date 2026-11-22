@@ -11,7 +11,7 @@ La suite de tests vive en `contracts/investment-income-based/tests/` y está div
 tests/
 ├── common/mod.rs        # setup compartido (despliegue del contrato, mock de oráculo, token, helpers)
 ├── success_tests.rs     # 21 tests dirigidos de flujo extremo a extremo
-├── error_tests.rs       # 44 tests dirigidos de guards
+├── error_tests.rs       # 45 tests dirigidos de guards
 └── fuzz_properties.rs   # 2 tests de fuzzing basado en propiedades (proptest)
 ```
 
@@ -29,7 +29,7 @@ Flujos completos extremo a extremo con aserciones **exactas, a nivel de campo**,
 
 Los ejemplos trabajados de esta documentación ([Fundraising](./fundraising-and-positions.md#ejemplo-a-escala-del-token)) reproducen estos valores exactos, así que cada cifra que lees aquí es verdad ejecutable.
 
-## 2. `error_tests.rs` — cada guard, un test por `callsite` (44 tests)
+## 2. `error_tests.rs` — cada guard, un test por `callsite` (45 tests)
 
 Un test por guard de error de negocio × entrypoint, asertando tanto el error de negocio limpio (sin trap) como el código de panic esperado. Cobertura:
 
@@ -39,7 +39,7 @@ Un test por guard de error de negocio × entrypoint, asertando tanto el error de
 - Guards de reembolso (ya reembolsado, fundraising terminado, nunca invirtió)
 - Guards de retirada (sin comisión disponible, ya retirada, fundraising en curso)
 - Guards de colateral (no configurado, vacío, solo un token)
-- Guards de emergencia (ya activa, comisión pendiente, operaciones bloqueadas durante emergencia)
+- Guards de emergencia (ya activa, comisión pendiente, colateral restante en el barrido, operaciones bloqueadas durante emergencia)
 - Guards de roles (ya posee el rol, el rol ya existe, regla single-holder de company/manager)
 
 ## 3. `fuzz_properties.rs` — fuzzing basado en propiedades de las asignaciones (2 propiedades)

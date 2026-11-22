@@ -5,7 +5,10 @@ title: Emergency close
 
 # Emergency close
 
-Emergency close is the engine's **terminal post-fundraising close-out gate**. It can be activated when the company is expected to fail and there is no collateral left to cover the positions. From that point on, the instance freezes and its remaining funds can only leave through the final sweep ([`withdrawn_all`](./withdrawals.md#final-sweep--withdrawn_all)).
+Emergency close is the engine's **terminal post-financing-period close-out gate**. It can be activated when the company is expected to fail and there is no collateral left to cover the positions. From that point on, the instance freezes and its remaining funds can only leave through:
+
+- The ([`withdrawn_all`](./withdrawals.md#final-sweep--withdrawn_all)) function that withdraws all remaining funds from the contract.
+- The ([`withdrawn_all_collateral`](./collateral.md#collateral-final-sweep--withdrawn_all_collateral)) function that withdraws the remaining collateral from the contract (if any).
 
 ## What it is and what it is not
 
@@ -36,9 +39,11 @@ Activation is accepted only when **all** of the following hold:
 
 ## What changes once emergency mode is active
 
-Once activated, the gate applies to *every* capital-moving entrypoint: `invest`, `process_investor_payment`, `refund_investor`, `add_company_transfer`, `withdrawn`, and `withdrawn_commissions` all reject calls with `OperationNotAllowedInEmergency` (50). Collateral settlement (`pay_with_collateral`) and `add_collateral` are equally blocked by their pause/emergency guards.
+Once activated, *every* capital-moving entrypoint: `invest`, `process_investor_payment`, `refund_investor`, `add_company_transfer`, `withdrawn`, and `withdrawn_commissions` rejects calls with `OperationNotAllowedInEmergency` (50). Collateral settlement (`pay_with_collateral`) and `add_collateral` are equally blocked by their pause/emergency guards.
 
-Emergency activation **does not modify the balance**. It sets the emergency state flag and the funds remain in the contract under the same `Balance` fields as before. As seen in [`withdrawn_all`](./withdrawals.md#final-sweep--withdrawn_all) and [`withdrawn_all_collateral`](./collateral.md#collateral-final-sweep--withdrawn_all_collateral), the remaining funds (tokens and collateral) go out to a `manager` address and, after the sweep, the balance is reset to `0`.
+Emergency activation **does not modify the balance**. It sets the emergency state flag and the funds remain in the contract under the same `Balance` fields as before. As seen in [`withdrawn_all`](./withdrawals.md#final-sweep--withdrawn_all) and [`withdrawn_all_collateral`](./collateral.md#collateral-final-sweep--withdrawn_all_collateral), the remaining funds (tokens and collateral) go out to a `manager` address.
+
+> **Important note**: `withdrawn_all` checks that the collateral has been withdrawn previously before withdrawing the remaining funds and resetting the balance. Therefore, the collateral must be withdrawn as a prior step to `withdrawn_all`.
 
 ```mermaid
 flowchart TD
@@ -87,10 +92,10 @@ The full closing sequence integrators should be ready for:
 2. Withdraw pending commissions (withdrawn_commissions) — required:
    equity contract_commissions must be 0 for the activation to succeed.
 3. activate_emergency_close (admin) — freezes the instance.
-4. withdrawn_all (admin, manager receiver) — sweeps any remaining token
+4. withdrawn_all_collateral (admin, manager receiver) — sweeps the remaining
+   collateral to the manager and keeps the Balance settled.
+5. withdrawn_all (admin, manager receiver) — sweeps any remaining token
    balance (settled or pending obligations) and resets the Balance.
-5. withdrawn_all_collateral (admin, manager receiver) — sweeps the remaining
-   collateral to the manager and keeps the Balance reset.
    Instance fully closed.
 ```
 

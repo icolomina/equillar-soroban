@@ -79,13 +79,14 @@ stellar contract invoke \
   --to "G....."
 ```
 
-Es la operación de cierre del ciclo de vida de una instancia. Su única condición previa es que el contrato se encuentre en estado de emergencia:
+Es la operación de cierre del ciclo de vida de una instancia. Sus condiciones previas, comprobadas en este orden:
 
-| Comprobación | Error si se no se cumple|
+| Comprobación | Error si no se cumple |
 |---|---|
+| El contrato no mantiene colateral pendiente de retirar | `CollateralStillRemainingOnContract` (60) |
 | El cierre de emergencia está **activo** | `EmergencyNotActive` (49) |
 
-Si el contrato aún mantiene tokens, la totalidad del balance del token se transfiere a `to`, y el `Balance` se **resetea** (todos los campos a cero).
+Si el contrato aún mantiene tokens, la totalidad del balance del token se transfiere a `to`, y el `Balance` se **resetea** (todos los campos a cero). Las obligaciones de pago **no** necesitan estar a cero: el integrador decide off-chain qué hacer con los fondos recibidos pero el **colateral debe haberse retirado previamente** mediante [`withdrawn_all_collateral`](./collateral.md#barrido-final-del-colateral--withdrawn_all_collateral): con colateral aún en el contrato, `withdrawn_all` se rechaza con `CollateralStillRemainingOnContract` (60).
 
 > `withdrawn_all` exige que la compuerta de emergencia esté activa. En la sección [Cierre de emergencia](./emergency-close.md) se analiza cómo la activación y la operación componen juntas el cierre de una instancia. Para el colateral restante existe la operación equivalente [`withdrawn_all_collateral`](./collateral.md#barrido-final-del-colateral--withdrawn_all_collateral), que también envía los fondos a una dirección `manager` en lugar de devolverlos al proveedor.
 

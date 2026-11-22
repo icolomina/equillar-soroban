@@ -5,14 +5,14 @@ title: Cierre de emergencia
 
 # Cierre de emergencia
 
-El cierre de emergencia es la **compuerta terminal de cierre despues del periodo de financiación** del motor. Puede activarse cuando se espera que la empresa falle y no hay colateral para cubrir las posiciones. A partir de ese punto, la instancia se congela y sus fondos restantes solo pueden salir mediante:
+El cierre de emergencia es la **compuerta terminal de cierre después del periodo de financiación** del motor. Puede activarse cuando se espera que la empresa falle y no hay colateral para cubrir las posiciones. A partir de ese punto, la instancia se congela y sus fondos restantes solo pueden salir mediante:
 
-- La funcion ([`withdrawn_all`](./withdrawals.md#el-barrido-final--withdrawn_all)) que retira todos los fondos restantes del contrato.
-- La función ([`withdrawn_all_collateral`](./collateral.md#Barrido final del colateral — withdrawn_all_collateral)) que retira el colateral restante del contrato (si lo hubiese).
+- La función ([`withdrawn_all`](./withdrawals.md#el-barrido-final--withdrawn_all)) que retira todos los fondos restantes del contrato.
+- La función ([`withdrawn_all_collateral`](./collateral.md#barrido-final-del-colateral--withdrawn_all_collateral)) que retira el colateral restante del contrato (si lo hubiese).
   
 ## Qué es y qué no es
 
-> **No es** lo mismo que el [`refund_investor`](./refunds.md): los reembolsos devuelven importes depositados a los inversores mientras *el periodo de financiación esta vigente*, antes de que la empresa haya empezado a gastar los fondos recaudados. El cierre de emergencia es el camino posterior al fundraising.
+> **No es** lo mismo que el [`refund_investor`](./refunds.md): los reembolsos devuelven importes depositados a los inversores mientras *el periodo de financiación está vigente*, antes de que la empresa haya empezado a gastar los fondos recaudados. El cierre de emergencia es el camino posterior al fundraising.
 
 > **Colateral frente a cierre de emergencia:** tienen propósitos distintos. El colateral actúa como salvaguarda por posición, es decir, una posición individual que no puede cubrirse con los fondos del contrato puede liquidarse inmediatamente con el colateral disponible, sin afectar al resto del proyecto. El cierre de emergencia es la compuerta terminal a nivel de proyecto, reservada para cuando esa salvaguarda ya no basta.
 
@@ -43,7 +43,7 @@ Una vez activado, *todos* los entrypoints que mueven capital: `invest`, `process
 
 La activación de emergencia **no modifica el balance**. Activa la flag de estado de emergencia y los fondos permanecen en el contrato con los mismos campos del `Balance` que antes. Como vimos en [`withdrawn_all`](./withdrawals.md#el-barrido-final--withdrawn_all) y [`withdrawn_all_collateral`](./collateral.md#barrido-final-del-colateral--withdrawn_all_collateral), los fondos restantes (tokens y colateral) salen hacia una dirección `manager`. 
 
-> **Nota importante**: `withdrawn_all` comprueba que el colateral se haya retirado previamente a retirar el resto de fondos y resetar el balance. Así pués, es necesario retirar el colateral como paso previo a `withdrawn_all`.
+> **Nota importante**: `withdrawn_all` comprueba que el colateral se haya retirado previamente a retirar el resto de fondos y resetear el balance. Así pues, es necesario retirar el colateral como paso previo a `withdrawn_all`.
 
 ```mermaid
 flowchart TD
@@ -94,9 +94,9 @@ La secuencia completa de cierre que los integradores deben tener lista:
 3. activate_emergency_close (admin) — congela la instancia.
 4. withdrawn_all_collateral (admin, receptor manager) — barre el colateral
    restante hacia el manager y mantiene el Balance reseteado.
-   Instancia completamente cerrada.
 5. withdrawn_all (admin, receptor manager) — barre cualquier balance de token
    restante (obligaciones liquidadas o pendientes) y resetea el Balance.
+   Instancia completamente cerrada.
 ```
 
 El paso 1 y la devolución de colateral (`return_collateral_to_company`) deben ocurrir **antes** de la activación si se quieren usar: después de ella los entrypoints de settlement quedan bloqueados y solo `withdrawn_all` y `withdrawn_all_collateral` siguen siendo posibles.

@@ -297,7 +297,7 @@ Condiciones:
 | `to` posee el rol `manager` | error de acceso |
 | El cierre de emergencia está **activo** | `EmergencyNotActive` (49) |
 
-Si el contrato aún mantiene tokens de colateral, la totalidad del balance se transfiere a `to` y el `Balance` y el balance descuenta la cantidad de colateral transferida tanto del activo como del pasivo (de la misma foma que cuando se devuelve a la compañía).
+Si el contrato aún mantiene tokens de colateral, la totalidad del balance se transfiere a `to` y el balance descuenta la cantidad de colateral transferida tanto del activo como del pasivo (de la misma forma que cuando se devuelve a la compañía).
 
 ## Eventos
 

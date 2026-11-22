@@ -186,9 +186,7 @@ pub(crate) fn withdrawn_all_collateral(env: &Env, to: &Address) -> Result<i128, 
     let collateral_contract_balance = collateral_token.balance(&env.current_contract_address());
     let mut balance = shared::storage::get_balance_or_new(env);
 
-    validation::validate_withdrawn_all_collateral(
-        shared::storage::get_emergency_close_state(env)
-    )?;
+    validation::validate_withdrawn_all_collateral(shared::storage::get_emergency_close_state(env))?;
 
     if collateral_contract_balance > 0 {
         collateral_token
