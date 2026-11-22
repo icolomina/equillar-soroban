@@ -2,7 +2,7 @@ use soroban_sdk::token::TokenClient;
 use soroban_sdk::{Address, Env};
 
 use crate::require;
-use crate::shared::types::{ContractBalance, ContractData};
+use crate::shared::types::ContractData;
 use crate::shared::types::{Error, Position};
 
 /// Validates reserve-backed periodic payment constraints.
@@ -12,13 +12,13 @@ use crate::shared::types::{Error, Position};
 pub fn validate_reserve_balance(
     amount_to_transfer: i128,
     position: &Position,
-    contract_balances: &ContractBalance,
+    contract_liquidity: i128,
     next_payment_round: u32,
 ) -> Result<(), Error> {
     require!(
         position.payments_transferred == next_payment_round,
         Error::PaymentAlreadyProcessedForThisPeriod,
-        amount_to_transfer <= contract_balances.reserve,
+        amount_to_transfer <= contract_liquidity,
         Error::ContractReserveInsufficientBalance
     );
     Ok(())
@@ -33,9 +33,7 @@ pub fn validate_company_transfer(
     token: &TokenClient,
     owner: &Address,
     contract_data: &ContractData,
-    contract_balance: &ContractBalance,
     amount: i128,
-    next_payment_round: u32,
 ) -> Result<(), Error> {
     let current_ts = env.ledger().timestamp();
     require!(
@@ -43,18 +41,11 @@ pub fn validate_company_transfer(
         Error::NextPaymentCannotBeScheduledYet
     );
 
-    let is_last_round = next_payment_round == contract_data.return_months - 1;
-    if is_last_round {
-        require!(
-            contract_balance.reserve + amount >= contract_balance.payment_obligations,
-            Error::ContractReserveInsufficientBalance
-        );
-    } else {
-        require!(
-            amount >= (contract_data.amount_to_pay_per_month - contract_balance.reserve),
-            Error::ContractReserveInsufficientBalance
-        );
-    }
+    require!(
+        amount + token.balance(&env.current_contract_address())
+            >= contract_data.amount_to_pay_per_month,
+        Error::ContractReserveInsufficientBalance
+    );
 
     require!(
         token.balance(owner) >= amount,

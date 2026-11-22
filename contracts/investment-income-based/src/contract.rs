@@ -11,15 +11,13 @@ use crate::emergency;
 use crate::investment;
 use crate::payments;
 use crate::require;
+use crate::shared::types::Balance;
 use crate::treasury;
 
 use crate::shared::types::PositionReturnType;
 use crate::shared::{
     self,
-    types::{
-        ContractBalance, ContractData, Error, InvestmentContractParams, LiquidateInvestmentsStatus,
-        Position,
-    },
+    types::{ContractData, Error, InvestmentContractParams, LiquidateInvestmentsStatus, Position},
 };
 
 #[contract]
@@ -99,9 +97,7 @@ fn validate_role(e: &Env, account: &Address, role: &Symbol) -> Result<(), Error>
     }
 
     if role == &MANAGER_ROLE || role == &COMPANY_ROLE {
-        if access_control::get_role_member_count(e, role) > 0 {
-            already_granted_role = true
-        }
+        already_granted_role = access_control::get_role_member_count(e, role) > 0;
     }
 
     require!(!already_has_role, Error::AddressAlreadyHoldsRole);
@@ -238,9 +234,9 @@ impl InvestmentContract {
     ///
     /// # Access Control
     /// `caller` must authenticate and be either admin or any existing role holder.
-    pub fn get_contract_balance(env: Env, caller: Address) -> Result<ContractBalance, Error> {
+    pub fn get_contract_balance(env: Env, caller: Address) -> Result<Balance, Error> {
         require_admin_or_any_role(&env, &caller);
-        Ok(shared::storage::get_balances_or_new(&env))
+        Ok(shared::storage::get_balance_or_new(&env))
     }
 
     /// Grants `operator` role to an address.
@@ -388,6 +384,19 @@ impl InvestmentContract {
         treasury::withdrawn_all(&env, &to)
     }
 
+    /// Withdraws all collateral to `to`.
+    ///
+    /// # Access Control
+    /// - Contract must not be paused.
+    /// - Admin only.
+    /// - `to` must hold `manager` role.
+    #[when_not_paused]
+    #[only_admin]
+    #[has_role(to, "manager")]
+    pub fn withdrawn_all_collateral(env: Env, to: Address) -> Result<i128, Error> {
+        collateral::withdrawn_all_collateral(&env, &to)
+    }
+
     /// Registers an inbound transfer from a company address for next payment round.
     ///
     /// # Access Control
@@ -409,17 +418,6 @@ impl InvestmentContract {
     #[when_not_paused]
     pub fn activate_emergency_close(env: Env) -> Result<bool, Error> {
         emergency::activate_emergency_close(&env)
-    }
-
-    /// Pays one investor from emergency pool according to emergency rules.
-    ///
-    /// # Access Control
-    /// - Contract must not be paused.
-    /// - Admin only.
-    #[only_admin]
-    #[when_not_paused]
-    pub fn emergency_pay_investor(env: Env, token_id: u32) -> Result<i128, Error> {
-        emergency::emergency_pay_investor(&env, token_id)
     }
 
     /// Deposits collateral token amount and recalculates collateral state.

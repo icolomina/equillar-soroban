@@ -1,9 +1,12 @@
 # AGENTS.md
 
 Soroban (Stellar) smart contract repo, single crate in a Cargo workspace:
-`contracts/investment-income-based`. The README is accurate and detailed — it
-documents the module layout, public contract API, and constructor params.
-Don't duplicate it; consult it before changing entrypoints or params.
+`contracts/investment-income-based`. The README is a minimal entry point that
+links to the full documentation, which lives in `docs/en` (English) and
+`docs/es` (Spanish), each with its own `index.md` table of contents. The docs
+are the detailed reference (module layout, public contract API, constructor
+params) — keep them in sync when changing entrypoints or params, don't
+duplicate their content in the README.
 
 ## Commands
 
@@ -17,8 +20,11 @@ cargo fmt --all                     # CI enforces --check; run before committing
 cargo clippy                        # CI runs it without -D warnings
 ```
 
-Tests live in two binaries: `tests/success_tests.rs` and `tests/error_tests.rs`.
-Use `--test success_tests` / `--test error_tests` to scope a run.
+Tests live in three binaries: `tests/success_tests.rs`, `tests/error_tests.rs`,
+and the proptest suite `tests/fuzz_properties.rs` (property-based fuzzing of
+the allocation math, run via `invest`). Scope a run with
+`--test success_tests` / `--test error_tests` / `--test fuzz_properties`;
+scale proptest cases with `PROPTEST_CASES=10000 cargo test --test fuzz_properties`.
 
 WASM build (run inside the contract dir):
 
@@ -33,16 +39,13 @@ stellar contract build
   contract's own `target/`** (`contracts/*` are workspace members). The final
   wasm is `target/wasm32v1-none/release/investment_income_based.wasm` from the
   repo root (`../../target/...` from the contract dir).
-- **`stellar-contract-utils`, `stellar-access`, `stellar-macros` are git
-  dependencies** pinned to a commit of `OpenZeppelin/stellar-contracts` (not
-  crates.io), because the crates.io releases don't support soroban-sdk 28 yet.
-  The workspace `soroban-sdk` must match the version those crates use (28.x).
-  When OpenZeppelin publishes a release for soroban-sdk 28+, switch back to
-  crates.io versions and bump the `rev` only deliberately.
-- **`Cargo.lock` is gitignored** and resolved fresh in CI. The former
-  `ed25519-dalek` pin workaround is no longer needed.
 - **`test_snapshots/*.json` are auto-generated** by every `cargo test` run
   (deterministic, gitignored). Never hand-edit them; diffs there are noise.
+- **`tests/*.proptest-regressions` are auto-regenerated** by proptest whenever
+  a property fails. Seeds encode RNG state under the *current* strategy, so
+  after a bug fix or a strategy change they no longer reproduce their original
+  counterexample — delete stale seed files deliberately (note it in the
+  commit) and never hand-edit seeds while they are still valid.
 
 ## Testing conventions
 
@@ -65,6 +68,6 @@ tests. Doctests are disabled (`doctest = false` in the crate manifest).
 
 ## Local reference
 
-`.github/skill/` (gitignored, machine-local) contains a full Stellar/Soroban
-development playbook — consult it for Stellar CLI, SDK, and ecosystem
+`.opencode/skills/stellar/` (gitignored, machine-local) contains a full Stellar/Soroban
+development playbook — consult it for Stellar CLI, SDK, Soroban and ecosystem
 questions.

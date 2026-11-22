@@ -33,3 +33,10 @@ pub(super) fn validate_collateral_return(collateral_contract_balance: i128) -> R
     );
     Ok(())
 }
+
+pub(super) fn validate_withdrawn_all_collateral(
+    emergency_close_state: Option<u32>,
+) -> Result<(), Error> {
+    require!(emergency_close_state.is_some(), Error::EmergencyNotActive);
+    Ok(())
+}

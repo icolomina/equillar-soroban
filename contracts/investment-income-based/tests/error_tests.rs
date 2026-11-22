@@ -480,10 +480,12 @@ fn test_withdrawn_insufficient_project_balance() {
     test_data.token_admin.mint(&test_data.user, &1000);
     invest_as_operator(&test_data, &test_data.user, &1000, &1234_u32);
 
+    // Withdrawable volume is `managed_volume - contract_earnings` = 1044 - 5 = 1039.
+    // Withdrawing more than that must fail before any transfer is attempted.
     env.ledger().set_timestamp(8 * 86_400);
     test_data
         .client
-        .withdrawn(&999_i128, &test_data.project_address);
+        .withdrawn(&2000_i128, &test_data.project_address);
 }
 
 #[test]
@@ -789,7 +791,7 @@ fn test_withdrawn_commissions_while_fundraising_ongoing() {
 }
 
 #[test]
-#[should_panic(expected = "HostError: Error(Contract, #3)")]
+#[should_panic(expected = "HostError: Error(Contract, #63)")]
 fn test_withdrawn_commissions_no_available_commission() {
     let env = Env::default();
     let test_data = create_investment_contract(
@@ -814,7 +816,7 @@ fn test_withdrawn_commissions_no_available_commission() {
 }
 
 #[test]
-#[should_panic(expected = "HostError: Error(Contract, #3)")]
+#[should_panic(expected = "HostError: Error(Contract, #63)")]
 fn test_withdrawn_commissions_already_fully_withdrawn() {
     let env = Env::default();
     let test_data = create_investment_contract(
@@ -845,9 +847,12 @@ fn test_withdrawn_commissions_already_fully_withdrawn() {
         .withdrawn_commissions(&test_data.project_address);
 }
 
+/// `withdrawn_all` requires the emergency-close state to be active. When all
+/// obligations are settled but emergency mode was not activated, it must fail
+/// with `EmergencyNotActive` (#49).
 #[test]
-#[should_panic(expected = "HostError: Error(Contract, #14)")]
-fn test_emergency_pay_investor_address_has_not_invested() {
+#[should_panic(expected = "HostError: Error(Contract, #49)")]
+fn test_withdrawn_all_without_emergency() {
     let env = Env::default();
     let test_data = create_investment_contract(
         &env,
@@ -861,48 +866,98 @@ fn test_emergency_pay_investor_address_has_not_invested() {
         true,
         60,
         10,
-        400,
-    );
-
-    env.ledger().set_timestamp(8 * 86_400);
-    test_data.client.emergency_pay_investor(&999_u32);
-}
-
-#[test]
-#[should_panic(expected = "HostError: Error(Contract, #38)")]
-fn test_emergency_pay_investor_already_completed() {
-    let env = Env::default();
-    let test_data = create_investment_contract(
-        &env,
-        500_u32,
-        7_u64,
-        7_u64,
-        1_000_000_i128,
-        1_u32,
-        4_u32,
-        100_i128,
-        true,
-        60,
-        10,
-        400,
+        1200,
     );
 
     let user = Address::generate(&env);
     test_data.token_admin.mint(&user, &1000);
     let inv = invest_as_operator(&test_data, &user, &1000, &1234_u32);
+
+    test_data
+        .token_admin
+        .mint(&test_data.project_address, &2000);
+
+    // Settle every obligation so only the emergency gate can fail.
+    env.ledger().set_timestamp(15 * 86_400);
+    test_data
+        .client
+        .add_company_transfer(&261_i128, &test_data.project_address);
+    test_data.client.process_investor_payment(&inv.token_id);
+    test_data
+        .client
+        .add_company_transfer(&261_i128, &test_data.project_address);
+    test_data.client.process_investor_payment(&inv.token_id);
+    test_data
+        .client
+        .add_company_transfer(&261_i128, &test_data.project_address);
+    test_data.client.process_investor_payment(&inv.token_id);
+    test_data
+        .client
+        .add_company_transfer(&261_i128, &test_data.project_address);
+    test_data.client.process_investor_payment(&inv.token_id);
+
+    test_data
+        .client
+        .withdrawn_commissions(&test_data.project_address);
+
+    test_data.client.withdrawn_all(&test_data.project_address);
+}
+
+/// `withdrawn_all` requires the contract to hold no collateral when the token
+/// sweep runs. With collateral still deposited (and emergency already active),
+/// it must fail with `CollateralStillRemainingOnContract` (#60) — this check
+/// runs before the emergency gate. The collateral must be swept first via
+/// `withdrawn_all_collateral`.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #60)")]
+fn test_withdrawn_all_with_collateral_remaining() {
+    let env = Env::default();
+    let test_data = create_investment_contract(
+        &env,
+        500_u32,
+        7_u64,
+        7_u64,
+        1_000_000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        1200,
+    );
+
+    let user = Address::generate(&env);
+    test_data.token_admin.mint(&user, &1000);
+    invest_as_operator(&test_data, &user, &1000, &1234_u32);
+
+    let collateral_addr = Address::generate(&env);
+    let (token_collateral, token_collateral_admin) = create_token_contract(&env, &test_data.admin);
+    grant_company_exclusive(&test_data, &collateral_addr);
+    token_collateral_admin.mint(&collateral_addr, &200_i128);
+
+    test_data.client.add_collateral(
+        &token_collateral.address,
+        &100_i128,
+        &String::from_str(&env, "TEST"),
+        &collateral_addr,
+    );
 
     env.ledger().set_timestamp(8 * 86_400);
     test_data
         .client
         .withdrawn_commissions(&test_data.project_address);
     test_data.client.activate_emergency_close();
-    test_data.client.emergency_pay_investor(&inv.token_id);
-    test_data.client.emergency_pay_investor(&inv.token_id);
+
+    test_data.client.withdrawn_all(&test_data.project_address);
 }
 
+/// `withdrawn_all_collateral` requires collateral to be configured. Calling it
+/// on an instance without any collateral deposit must fail with
+/// `CollateralNotConfigured` (#36) — this check runs before the emergency gate.
 #[test]
-#[should_panic(expected = "HostError: Error(Contract, #49)")]
-fn test_emergency_pay_investor_without_activation() {
+#[should_panic(expected = "HostError: Error(Contract, #36)")]
+fn test_withdrawn_all_collateral_not_configured() {
     let env = Env::default();
     let test_data = create_investment_contract(
         &env,
@@ -911,7 +966,7 @@ fn test_emergency_pay_investor_without_activation() {
         7_u64,
         1_000_000_i128,
         1_u32,
-        2_u32,
+        4_u32,
         100_i128,
         true,
         60,
@@ -919,12 +974,89 @@ fn test_emergency_pay_investor_without_activation() {
         400,
     );
 
-    let user = Address::generate(&env);
-    test_data.token_admin.mint(&user, &1000);
-    let inv = invest_as_operator(&test_data, &user, &1000, &1234_u32);
-    env.ledger().set_timestamp(8 * 86_400);
+    test_data
+        .client
+        .withdrawn_all_collateral(&test_data.project_address);
+}
 
-    test_data.client.emergency_pay_investor(&inv.token_id);
+/// `withdrawn_all_collateral` requires the emergency-close state to be active.
+/// With collateral configured but no emergency activated, it must fail with
+/// `EmergencyNotActive` (#49).
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #49)")]
+fn test_withdrawn_all_collateral_without_emergency() {
+    let env = Env::default();
+    let test_data = create_investment_contract(
+        &env,
+        500_u32,
+        7_u64,
+        7_u64,
+        1_000_000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        400,
+    );
+
+    let collateral_addr = Address::generate(&env);
+    let (token_collateral, token_collateral_admin) = create_token_contract(&env, &test_data.admin);
+    grant_company_exclusive(&test_data, &collateral_addr);
+    token_collateral_admin.mint(&collateral_addr, &200_i128);
+
+    test_data.client.add_collateral(
+        &token_collateral.address,
+        &100_i128,
+        &String::from_str(&env, "TEST"),
+        &collateral_addr,
+    );
+
+    test_data
+        .client
+        .withdrawn_all_collateral(&test_data.project_address);
+}
+
+/// `withdrawn_all_collateral` transfers funds to an address holding the
+/// `manager` role. Calling it with an address that does not hold the role
+/// must be rejected by the access-control layer (`Unauthorized`, #2000).
+#[test]
+#[should_panic(expected = "#2000")]
+fn test_withdrawn_all_collateral_recipient_without_manager_role() {
+    let env = Env::default();
+    let test_data = create_investment_contract(
+        &env,
+        500_u32,
+        7_u64,
+        7_u64,
+        1_000_000_i128,
+        1_u32,
+        4_u32,
+        100_i128,
+        true,
+        60,
+        10,
+        400,
+    );
+
+    let collateral_addr = Address::generate(&env);
+    let (token_collateral, token_collateral_admin) = create_token_contract(&env, &test_data.admin);
+    grant_company_exclusive(&test_data, &collateral_addr);
+    token_collateral_admin.mint(&collateral_addr, &200_i128);
+
+    test_data.client.add_collateral(
+        &token_collateral.address,
+        &100_i128,
+        &String::from_str(&env, "TEST"),
+        &collateral_addr,
+    );
+
+    env.ledger().set_timestamp(8 * 86_400);
+    test_data.client.activate_emergency_close();
+
+    let outsider = Address::generate(&env);
+    test_data.client.withdrawn_all_collateral(&outsider);
 }
 
 #[test]
@@ -949,29 +1081,6 @@ fn test_activate_emergency_close_with_pending_commission() {
     let user = Address::generate(&env);
     test_data.token_admin.mint(&user, &1000);
     invest_as_operator(&test_data, &user, &1000, &1234_u32);
-
-    env.ledger().set_timestamp(8 * 86_400);
-    test_data.client.activate_emergency_close();
-}
-
-#[test]
-#[should_panic(expected = "HostError: Error(Contract, #52)")]
-fn test_activate_emergency_close_with_empty_pool() {
-    let env = Env::default();
-    let test_data = create_investment_contract(
-        &env,
-        500_u32,
-        7_u64,
-        7_u64,
-        1_000_000_i128,
-        1_u32,
-        4_u32,
-        100_i128,
-        true,
-        60,
-        10,
-        400,
-    );
 
     env.ledger().set_timestamp(8 * 86_400);
     test_data.client.activate_emergency_close();

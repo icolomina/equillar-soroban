@@ -3,7 +3,7 @@ use stellar_contract_utils::math::wad::Wad;
 
 use crate::shared::{
     oracle::{Asset, ReflectorClient},
-    types::{ContractBalance, Position},
+    types::{Balance, Error, Position},
 };
 
 fn get_collateral_cross_price(
@@ -18,6 +18,11 @@ fn get_collateral_cross_price(
     // Contract token price in terms of the same base asset
     let contract_token_price_data =
         oracle.lastprice(&Asset::Stellar(contract_token_addr.clone()))?;
+
+    // Avoid denominator 0 if the oracle price is 0: Edge case
+    if contract_token_price_data.price == 0_i128 {
+        return None;
+    }
 
     // Price cross: collateral / contract_token,
     // both expressed in the oracle's base asset, at the same scale (oracle_decimals)
@@ -34,15 +39,20 @@ fn get_collateral_cross_price(
 ///
 /// Allocation is proportional to remaining obligations of the position over
 /// total contract payment obligations.
+///
+/// # Errors
+/// `CollateralPriceOracleError` when the cross price or the WAD valuation
+/// cannot be computed; `EmptyPaymentObligations` when the guard detects
+/// non-positive total payment obligations (degenerate accounting state).
 pub(super) fn get_collateral_for_investment(
     env: &Env,
     position: &Position,
-    contract_balance: &ContractBalance,
+    balance: &Balance,
     collateral_amount: i128,
     collateral_token: &TokenClient,
     contract_token: &TokenClient,
     oracle_addr: &Address,
-) -> Option<i128> {
+) -> Result<i128, Error> {
     let mut required_collateral_amount_wad =
         Wad::from_token_amount(env, collateral_amount, collateral_token.decimals() as u8);
 
@@ -51,32 +61,48 @@ pub(super) fn get_collateral_for_investment(
         &collateral_token.address,
         &contract_token.address,
         oracle_addr,
-    )?;
+    )
+    .ok_or(Error::CollateralPriceOracleError)?;
+
+    // A future bookkeeping bug could make obligations zero or negative with an
+    // active position; that would trap the ratio below. Guard locally instead
+    // of relying on many accounting paths staying correct.
+    if balance.liabilities.payment_obligations <= 0 {
+        return Err(Error::EmptyPaymentObligations);
+    }
 
     let remaining_obligations_wad = Wad::from_token_amount(
         env,
-        contract_balance.payment_obligations,
+        balance.liabilities.payment_obligations,
         contract_token.decimals() as u8,
     );
 
-    let collateral_value_wad = required_collateral_amount_wad * cross_price_wad;
-    if collateral_value_wad > remaining_obligations_wad {
-        required_collateral_amount_wad = remaining_obligations_wad / cross_price_wad;
+    if let Some(collateral_value_wad) =
+        required_collateral_amount_wad.checked_mul(env, cross_price_wad)
+    {
+        if collateral_value_wad > remaining_obligations_wad {
+            required_collateral_amount_wad = remaining_obligations_wad
+                .checked_div(env, cross_price_wad)
+                .ok_or(Error::CollateralPriceOracleError)?;
+        }
+
+        let amount_to_paid_pending = position.total - position.paid;
+        let investment_collateral_corresponding_ratio = Wad::from_ratio(
+            env,
+            amount_to_paid_pending,
+            balance.liabilities.payment_obligations,
+        );
+
+        if let Some(investment_corresponding_collateral_amount_wad) =
+            investment_collateral_corresponding_ratio
+                .checked_mul(env, required_collateral_amount_wad)
+        {
+            return Ok(investment_corresponding_collateral_amount_wad
+                .to_token_amount(env, collateral_token.decimals() as u8));
+        }
     }
 
-    let amount_to_paid_pending = position.total - position.paid;
-    let investment_collateral_corresponding_ratio = Wad::from_ratio(
-        env,
-        amount_to_paid_pending,
-        contract_balance.payment_obligations,
-    );
-
-    let investment_corresponding_collateral_amount_wad =
-        investment_collateral_corresponding_ratio * required_collateral_amount_wad;
-    Some(
-        investment_corresponding_collateral_amount_wad
-            .to_token_amount(env, collateral_token.decimals() as u8),
-    )
+    Err(Error::CollateralPriceOracleError)
 }
 
 /// Calculates collateral coverage level in basis points (x100).
@@ -108,9 +134,12 @@ pub(super) fn calculate_collateral_level(
 
     let collateral_wad =
         Wad::from_token_amount(env, collateral_amount, collateral_token.decimals() as u8);
-    let collateral_value_wad = collateral_wad * cross_price_wad;
-    let collateral_value =
-        collateral_value_wad.to_token_amount(env, contract_token.decimals() as u8);
+    if let Some(collateral_value_wad) = collateral_wad.checked_mul(env, cross_price_wad) {
+        let collateral_value =
+            collateral_value_wad.to_token_amount(env, contract_token.decimals() as u8);
 
-    Some((collateral_value * 10_000_i128 / payment_obligations) as u32)
+        return Some((collateral_value * 10_000_i128 / payment_obligations) as u32);
+    }
+
+    None
 }

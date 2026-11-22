@@ -1,9 +1,8 @@
 use soroban_sdk::{Address, Env};
 
-use crate::emergency::EmergencyCloseState;
 use crate::shared::storage_helper;
-use crate::shared::types::Position;
-use crate::shared::types::{ContractBalance, ContractData, DataKey};
+use crate::shared::types::{Balance, Position};
+use crate::shared::types::{ContractData, DataKey};
 
 /// Loads persisted contract configuration from instance storage.
 ///
@@ -29,37 +28,35 @@ pub fn update_contract_data(env: &Env, contract_data: &ContractData) {
 }
 
 /// Returns current balances snapshot, defaulting to a zeroed balance object.
-pub fn get_balances_or_new(env: &Env) -> ContractBalance {
-    let balances = env
+pub fn get_balance_or_new(env: &Env) -> Balance {
+    let balance = env
         .storage()
         .instance()
-        .get(&DataKey::ContractBalances)
+        .get(&DataKey::Balance)
         .unwrap_or_default();
 
     storage_helper::bump_instance_ttl(env);
-    balances
+    balance
 }
 
 /// Persists contract balances snapshot.
-pub fn update_contract_balances(env: &Env, balances: &ContractBalance) {
-    env.storage()
-        .instance()
-        .set(&DataKey::ContractBalances, balances);
+pub fn update_balance(env: &Env, balance: &Balance) {
+    env.storage().instance().set(&DataKey::Balance, balance);
     storage_helper::bump_instance_ttl(env);
 }
 
 /// Returns emergency-close state if present.
-pub fn get_emergency_close_state(env: &Env) -> Option<EmergencyCloseState> {
+pub fn get_emergency_close_state(env: &Env) -> Option<u32> {
     let state = env.storage().instance().get(&DataKey::EmergencyCloseState);
     storage_helper::bump_instance_ttl(env);
     state
 }
 
 /// Persists emergency-close state.
-pub fn set_emergency_close_state(env: &Env, state: &EmergencyCloseState) {
+pub fn set_emergency_close_state(env: &Env) {
     env.storage()
         .instance()
-        .set(&DataKey::EmergencyCloseState, state);
+        .set(&DataKey::EmergencyCloseState, &1_u32);
     storage_helper::bump_instance_ttl(env);
 }
 

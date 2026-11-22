@@ -11,4 +11,4 @@ Cargo.lock
 # Local settings
 .soroban
 .stellar
-/.github/skill/
+/.opencode/

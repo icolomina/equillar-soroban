@@ -6,6 +6,19 @@ use crate::{
     shared::types::{ContractData, Position, PositionReturnType},
 };
 
+/// Ensure amount will not overflow when converting to Wad
+/// Important: If Wad implementation change in the future and won't panic anymore, this logic should change too
+fn ensure_non_wad_overflowing_deposit(decimals: u8, amount: &i128) -> Option<&i128> {
+    if decimals < 18 {
+        let factor = 10u128.pow((18 - decimals) as u32) as i128; // max 1e18
+        if *amount > i128::MAX / factor {
+            return None;
+        }
+    }
+
+    Some(amount)
+}
+
 /// Computes commission denominator tier based on token amount.
 ///
 /// Larger investments increase the denominator (thus reducing commission rate)
@@ -31,8 +44,9 @@ fn get_deposit_allocation(
     decimals: u32,
     rate_denominator: u32,
     interest_rate: u32,
-) -> DepositAllocation {
+) -> Option<DepositAllocation> {
     let decimals_for_wad: u8 = decimals.try_into().expect("Token decimals must fit in u8");
+    ensure_non_wad_overflowing_deposit(decimals_for_wad, amount)?;
 
     let amount_wad = Wad::from_token_amount(env, *amount, decimals_for_wad);
     let commission_rate_wad = Wad::from_ratio(
@@ -47,19 +61,23 @@ fn get_deposit_allocation(
         10_000, // o el denominador que corresponda según tu semántica de negocio
     );
 
-    let amount_to_commission_wad = amount_wad * commission_rate_wad;
-    let amount_to_invest_wad = amount_wad - amount_to_commission_wad;
-    let returns_wad = amount_to_invest_wad * return_rate_wad;
+    if let Some(amount_to_commission_wad) = amount_wad.checked_mul(env, commission_rate_wad) {
+        let amount_to_invest_wad = amount_wad - amount_to_commission_wad;
 
-    let commission = amount_to_commission_wad.to_token_amount(env, decimals_for_wad);
-    let deposited = *amount - commission; //
-    let returns = returns_wad.to_token_amount(env, decimals_for_wad);
+        if let Some(returns_wad) = (amount_to_invest_wad).checked_mul(env, return_rate_wad) {
+            let commission = amount_to_commission_wad.to_token_amount(env, decimals_for_wad);
+            let deposited = *amount - commission;
+            let returns = returns_wad.to_token_amount(env, decimals_for_wad);
 
-    DepositAllocation {
-        commission,
-        returns,
-        deposited,
+            return Some(DepositAllocation {
+                commission,
+                returns,
+                deposited,
+            });
+        }
     }
+
+    None
 }
 
 fn calculate_regular_payment(
@@ -81,7 +99,7 @@ pub fn create_position(
     amount: &i128,
     decimals: u32,
     token_id: u32,
-) -> Position {
+) -> Option<Position> {
     let rate_denominator = calculate_rate_denominator(
         amount,
         cd.cmr_upper_divisor,
@@ -89,21 +107,24 @@ pub fn create_position(
         &cd.cmr_reductor,
     );
 
-    let deposit_allocation =
-        get_deposit_allocation(env, amount, decimals, rate_denominator, cd.interest_rate);
+    if let Some(deposit_allocation) =
+        get_deposit_allocation(env, amount, decimals, rate_denominator, cd.interest_rate)
+    {
+        let regular_payment =
+            calculate_regular_payment(&deposit_allocation, &cd.return_type, cd.return_months);
 
-    let regular_payment =
-        calculate_regular_payment(&deposit_allocation, &cd.return_type, cd.return_months);
-
-    Position {
-        deposited: deposit_allocation.deposited,
-        commission: deposit_allocation.commission,
-        returns: deposit_allocation.returns,
-        total: deposit_allocation.get_total_claimable(),
-        completed: false,
-        regular_payment,
-        paid: 0_i128,
-        payments_transferred: 0_u32,
-        token_id,
+        return Some(Position {
+            deposited: deposit_allocation.deposited,
+            commission: deposit_allocation.commission,
+            returns: deposit_allocation.returns,
+            total: deposit_allocation.get_total_claimable(),
+            completed: false,
+            regular_payment,
+            paid: 0_i128,
+            payments_transferred: 0_u32,
+            token_id,
+        });
     }
+
+    None
 }

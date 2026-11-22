@@ -55,7 +55,7 @@ pub(crate) fn process_investor_payment(env: &Env, position_id: u32) -> Result<Po
         .ok_or(Error::AddressHasNotInvested)?;
     let mut position =
         shared::storage::get_position(env, position_id).ok_or(Error::AddressHasNotInvested)?;
-    let mut contract_balance = shared::storage::get_balances_or_new(env);
+    let mut balance = shared::storage::get_balance_or_new(env);
 
     if position.completed {
         return Err(Error::PositionCompleted);
@@ -73,7 +73,7 @@ pub(crate) fn process_investor_payment(env: &Env, position_id: u32) -> Result<Po
         validation::validate_reserve_balance(
             amount_to_transfer,
             &position,
-            &contract_balance,
+            token.balance(&env.current_contract_address()),
             next_payment_round,
         )?;
 
@@ -84,10 +84,10 @@ pub(crate) fn process_investor_payment(env: &Env, position_id: u32) -> Result<Po
     }
 
     shared::storage::set_position(env, position_id, &position);
-    contract_balance.recalculate_from_payment_to_investor(amount_to_transfer)?;
-    shared::storage::update_contract_balances(env, &contract_balance);
+    balance.recalculate_from_payment_to_investor(amount_to_transfer)?;
+    shared::storage::update_balance(env, &balance);
 
-    shared::events::emit_balance_updated_event(env, &contract_balance);
+    shared::events::emit_balance_updated_event(env, &balance);
     events::emit_payment_sent(env, amount_to_transfer);
 
     Ok(position)
@@ -104,28 +104,19 @@ pub(crate) fn add_company_transfer(env: &Env, from: &Address, amount: i128) -> R
     let contract_data = shared::storage::get_contract_data(env);
     shared_validation::validate_not_in_emergency(shared::storage::get_emergency_close_state(env))?;
 
-    let mut contract_balance = shared::storage::get_balances_or_new(env);
+    let mut balance = shared::storage::get_balance_or_new(env);
     let token = shared::token::get_token(env, &contract_data);
-    let next_payment_round = storage::get_next_payment_round(env);
 
-    validation::validate_company_transfer(
-        env,
-        &token,
-        from,
-        &contract_data,
-        &contract_balance,
-        amount,
-        next_payment_round,
-    )?;
+    validation::validate_company_transfer(env, &token, from, &contract_data, amount)?;
 
     token
         .try_transfer(from, env.current_contract_address(), &amount)
         .map_err(|_| Error::RecipientCannotReceivePayment)?
         .map_err(|_| Error::InvalidPaymentData)?;
 
-    contract_balance.recalculate_from_company_contribution(amount)?;
-    shared::storage::update_contract_balances(env, &contract_balance);
-    shared::events::emit_balance_updated_event(env, &contract_balance);
+    balance.recalculate_from_company_contribution(amount)?;
+    shared::storage::update_balance(env, &balance);
+    shared::events::emit_balance_updated_event(env, &balance);
     events::emit_company_transfer_received(env, amount);
     storage::incr_next_payment_round(env);
 
